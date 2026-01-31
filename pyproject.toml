@@ -1,0 +1,24 @@
+[project]
+name = "finpolar-backend"
+version = "0.1.0"
+description = "Simple stock price analyzer app backend"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # data management
+    "polars>=1.37.1",
+    #stock fetch api
+    "yfinance",
+    #langchain and langgraph
+    "langchain-openai",
+    "langchain-core",
+    "langgraph",
+
+    #system things
+    "dotenv",
+    "pyarrow",
+
+    #api
+    "fastapi",
+    "uvicorn",
+]
