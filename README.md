@@ -9,3 +9,7 @@ AI-powered stock analysis engine built with **LangGraph** and **FastAPI**.
 ### 🛠 Setup
 1. `pip install -r requirements.txt`
 2. `uvicorn project.api.app:app --reload`
+
+
+### 🔗 Project Links
+- **Frontend Repository:** https://github.com/AlperHakli/finpolar-frontend
