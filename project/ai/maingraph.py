@@ -1,9 +1,12 @@
 from langgraph.graph import StateGraph , END
+from langgraph.checkpoint.memory import MemorySaver
 from project.ai.agentstate import AgentState
 from project.ai.tools import custom_tool_executor
 from project.ai.nodes import call_model , should_continue
 
 workflow = StateGraph(AgentState)
+
+memory = MemorySaver();
 
 
 workflow.add_node("agent" , call_model)
@@ -23,6 +26,6 @@ workflow.add_conditional_edges(
 
 workflow.add_edge("tool_node" , "agent")
 
-app = workflow.compile()
+app = workflow.compile(checkpointer=memory)
 
 

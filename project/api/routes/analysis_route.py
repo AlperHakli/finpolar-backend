@@ -6,10 +6,10 @@ import json
 router = APIRouter(prefix="/analysis" ,tags=["Stock Analysis"])
 
 @router.post("/chat")
-async def chat_llm(request: AnalysisModel , llm_api_key: str ):
+async def chat_llm(request: AnalysisModel):
     async def sse_wrapper():
 
-        async for token in AnalysisRepo.get_ai_stream(request.message):
+        async for token in AnalysisRepo.get_ai_stream(request.message , session_id= request.session_id):
 
             data = json.dumps({"text": token} , ensure_ascii=False)
             yield f"data: {data}\n\n"
