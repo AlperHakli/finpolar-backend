@@ -1,9 +1,15 @@
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
-
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from project.api.routes.analysis_route import limiter
 from project.api.routes import analysis_route , stocks_route
 
 app = FastAPI()
+
+app.state.limiter = limiter
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 app.add_middleware(
