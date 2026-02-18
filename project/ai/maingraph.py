@@ -6,7 +6,7 @@ from project.ai.nodes import call_model , should_continue
 
 workflow = StateGraph(AgentState)
 
-memory = MemorySaver();
+memory = MemorySaver()
 
 
 workflow.add_node("agent" , call_model)

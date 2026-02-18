@@ -4,7 +4,7 @@ from project.ai.model import basemodel
 from project.ai.tools import all_tools , only_get_stock_tool
 from langgraph.graph import END
 from project.ai.prompts import SYSTEM_MESSAGE
-def call_model(state: AgentState):
+async def call_model(state: AgentState):
     messages = state.get("messages" , [])
 
     window_size = 10
@@ -34,7 +34,7 @@ def call_model(state: AgentState):
     else:
         model_with_tools = basemodel.bind_tools(all_tools)
 
-    response = model_with_tools.invoke([SYSTEM_MESSAGE] + limited_history)
+    response = await model_with_tools.ainvoke([SYSTEM_MESSAGE] + limited_history)
 
     return {"messages" : [response]}
 

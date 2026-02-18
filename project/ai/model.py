@@ -9,8 +9,6 @@ basemodel = ChatOpenAI(
     streaming=True,
     temperature=0.0,
 
-
-
 )
 
 
