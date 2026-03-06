@@ -7,7 +7,7 @@ from project.api.repository.analysis_repo import AnalysisRepo
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 import json
-router = APIRouter(prefix="/analysis" ,tags=["Stock Analysis"])
+router = APIRouter(prefix="/analysis" ,tags=["AI chat"])
 
 
 limiter = Limiter(key_func=get_remote_address)
