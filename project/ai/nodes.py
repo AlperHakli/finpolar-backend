@@ -1,9 +1,10 @@
 from langchain_core.messages import ToolMessage
-from project.ai.agentstate import AgentState
+from project.ai.data_models import AgentState
 from project.ai.model import basemodel
-from project.ai.tools import all_tools , only_get_stock_tool
+from project.ai.tools import get_stock
 from langgraph.graph import END
 from project.ai.prompts import SYSTEM_MESSAGE
+from project.logic.constants import ALL_TOOLS
 async def call_model(state: AgentState):
     messages = state.get("messages" , [])
 
@@ -30,9 +31,9 @@ async def call_model(state: AgentState):
     raw_data = state.get("raw_data")
 
     if raw_data is None:
-        model_with_tools = basemodel.bind_tools(only_get_stock_tool)
+        model_with_tools = basemodel.bind_tools([get_stock])
     else:
-        model_with_tools = basemodel.bind_tools(all_tools)
+        model_with_tools = basemodel.bind_tools(ALL_TOOLS)
 
     response = await model_with_tools.ainvoke([SYSTEM_MESSAGE] + limited_history)
 
