@@ -30,4 +30,10 @@ class ConnectionError(FinpolarException):
     "Throws when connection is disabled"
     pass
 
+class DataTypeException(FinpolarException):
+    "Throws when data type is not compatible with function"
+    def __init__(self , message: str):
+        super().__init__(message=message)
+
+
 

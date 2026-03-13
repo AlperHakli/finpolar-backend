@@ -3,24 +3,16 @@ import os
 
 import yfinance
 import logging
-from fastapi import status, HTTPException
-from project.exceptions import StockNotFoundException, YfinanceApiException
+from project.logic.exceptions import StockNotFoundException, YfinanceApiException
 import polars as pl
 import pandas as pd
-from project.utils import interval_calculator
-from project.utils import format_symbol, format_market_cap
+from project.logic.utils import IndicatorCalculationUtils
+
 
 logger = logging.getLogger(__name__)
 
 
 class StockRepository():
-
-    @staticmethod
-    async def get_all_stocks():
-        """
-        Fetch stock information from yfinance api to fill sidemenu
-        """
-
     @staticmethod
     async def get_single_stock(ticker: str):
         """
@@ -41,28 +33,39 @@ class StockRepository():
                     ticker=ticker,
                     message="Error in get_single_stock invalid stock name or no data found for relevant stock")
 
-            summary = info.get("longBusinessSummary", "No description available.")
+            name = info.get("longName")
+            currentPrice = info.get("currentPrice")
+            previousClose = info.get("previousClose")
+            sector = info.get("sector")
             marketcap = info.get("marketCap")
+            peRatio = info.get("trailingPE")
+            summary = info.get("longBusinessSummary", "No description available.")
             symbol = info.get("symbol")
 
+            changePercent = IndicatorCalculationUtils.change_percent_calculator(current_close=currentPrice, prev_close=previousClose)
             short_summary = summary[:520] + "..." if len(summary) > 520 else summary
-            short_marketcap = format_market_cap(marketcap)
-            formatted_symbol = format_symbol(symbol)
+            short_marketcap = IndicatorCalculationUtils.format_market_cap(marketcap)
+            formatted_symbol = IndicatorCalculationUtils.format_symbol(symbol)
+            changeDigit_raw = currentPrice - previousClose
+            changeDigit = f"{changeDigit_raw:.2f}"
+
             return {
-                "name": info.get("longName"),
-                "currentPrice": info.get("currentPrice"),
-                "sector": info.get("sector"),
+                "name": name,
+                "currentPrice": currentPrice,
+                "previousClose": previousClose,
+                "changePercent": changePercent,
+                "changeDigit" : changeDigit,
+                "sector": sector,
                 "marketCap": short_marketcap,
-                "peRatio": info.get("trailingPE"),
+                "peRatio": peRatio,
                 "summary": short_summary,
                 "symbol": formatted_symbol,
-
             }
         except StockNotFoundException:
             logger.warning(f"Invalid or missing ticker when get_single_stock : {ticker}")
             raise
         except Exception as e:
-            logger.error(f"Error when get_single_stock {ticker}")
+            logger.error(f"Error when get_single_stock {ticker} detail: {e}")
             raise YfinanceApiException(technical_detail=str(e))
 
     @staticmethod
@@ -73,7 +76,7 @@ class StockRepository():
         :param period: period (1mo , 1h , 1y etc.)
         :return: stock history with respect to given period
         """
-        interval = interval_calculator(period=period)
+        interval = IndicatorCalculationUtils.interval_calculator(period=period)
 
         if not ticker.endswith(".IS"):
             ticker += ".IS"
@@ -149,7 +152,7 @@ class StockRepository():
 
                 trade_value = volume * current_close
 
-                change_percent = ((current_close - prev_close) / prev_close) * 100
+                change_percent = IndicatorCalculationUtils.change_percent_calculator(current_close=current_close, prev_close=prev_close)
 
                 volume_list.append({
                     "symbol": ticker.replace(".IS", ""),
@@ -163,3 +166,10 @@ class StockRepository():
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(top_10_stocks, f, indent=2)
             logger.info("Daily top volume stock update completed")
+
+
+    @staticmethod
+    async def get_multiple_indicators():
+        ...
+        #TODO complete here
+
