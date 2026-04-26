@@ -23,5 +23,9 @@ dependencies = [
     "uvicorn",
     "slowapi",
 
+    #database
+    "sqlmodel",
+    "psycopg2-binary",
+
     "apscheduler"
 ]

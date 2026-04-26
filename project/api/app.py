@@ -13,12 +13,18 @@ from project.api.repository.stocks_repo import StockRepository
 from project.api.routes.analysis_route import limiter
 from project.api.routes import analysis_route , stocks_route
 from project.logic.exceptions import StockNotFoundException , YfinanceApiException
+from database import create_db_table
+
 
 logger = logging.getLogger(__name__)
 
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    #initialize db
+    create_db_table()
+    logger.info("Database successfully initialized")
 
     scheduler = BackgroundScheduler()
 
