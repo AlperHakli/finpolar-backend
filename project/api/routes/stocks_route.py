@@ -27,9 +27,9 @@ async def stock_history(ticker: str , period: str):
     return await StockRepository.get_single_stock_history(ticker=ticker , period=period)
 
 @router.get("/watchlist")
-async def fetch_watchlist():
+def fetch_watchlist():
     """
     Fetch top 10 active stocks
     """
 
-    return await StockRepository.get_watchlist()
+    return StockRepository.get_watchlist()

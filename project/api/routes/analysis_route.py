@@ -2,7 +2,7 @@ import asyncio
 
 from fastapi import APIRouter , Request
 from fastapi.responses import StreamingResponse
-from project.api.pydantic_models import AnalysisModel
+from project.api.base_models import AnalysisModel
 from project.api.repository.analysis_repo import AnalysisRepo
 from slowapi import Limiter
 from slowapi.util import get_remote_address
