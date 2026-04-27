@@ -1,5 +1,8 @@
-from fastapi import APIRouter
+from fastapi import APIRouter , Depends
 from project.api.repository.stocks_repo import StockRepository
+from project.api.database import get_session
+from project.api.base_models import GetSingleStockIndicatorModel
+from sqlmodel import Session
 
 router = APIRouter(prefix="/stocks", tags=["Stock Operations"])
 
@@ -26,10 +29,13 @@ async def stock_history(ticker: str , period: str):
     """
     return await StockRepository.get_single_stock_history(ticker=ticker , period=period)
 
+@router.get("/single-stock-indicators")
+async def get_single_stock_indicators(ticker: str , indicator_settings: GetSingleStockIndicatorModel):
+    return await StockRepository.get_single_stock_indicators()
+
 @router.get("/watchlist")
-def fetch_watchlist():
+def fetch_watchlist(session: Session = Depends(get_session)):
     """
     Fetch top 10 active stocks
     """
-
-    return StockRepository.get_watchlist()
+    return StockRepository.get_watchlist(session=session)

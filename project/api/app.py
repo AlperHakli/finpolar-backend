@@ -13,7 +13,7 @@ from project.api.repository.stocks_repo import StockRepository
 from project.api.routes.analysis_route import limiter
 from project.api.routes import analysis_route , stocks_route
 from project.logic.exceptions import StockNotFoundException , YfinanceApiException
-from database import create_db_table
+from project.api.database import create_db_table
 
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI):
 
     scheduler.add_job(StockRepository.update_top_volume_stocks , "cron" , hour = 18 , minute = 15 )
 
-    # scheduler.add_job(StockRepository.update_top_volume_stocks, "date")
+    scheduler.add_job(StockRepository.update_top_volume_stocks, "date")
 
     scheduler.start()
 

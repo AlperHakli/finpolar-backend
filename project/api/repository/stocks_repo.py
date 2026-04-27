@@ -3,13 +3,19 @@ import os
 
 import yfinance
 import logging
-from project.logic.exceptions import StockNotFoundException, YfinanceApiException
+
 import polars as pl
 import pandas as pd
-from project.logic.utils import IndicatorCalculationUtils
-from project.api.base_models import TopVolumeStocksModel , MasterTicker
-from project.api.database import engine
 from sqlmodel import Session , select
+from project.logic.exceptions import StockNotFoundException, YfinanceApiException
+from project.logic.utils import IndicatorCalculationUtils
+from project.api.base_models import TopVolumeStocksModel , MasterTicker , GetSingleStockIndicatorModel
+from project.logic.indicator_service import IndicatorService
+from project.api.redis_client import redis_manager
+from project.api.database import engine
+from project.api.repository.analysis_repo import S
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -80,19 +86,8 @@ class StockRepository():
         :return: stock history with respect to given period
         """
         try:
-            interval = IndicatorCalculationUtils.interval_calculator(period=period)
 
-            if not ticker.endswith(".IS"):
-                ticker += ".IS"
-
-            stock = yfinance.Ticker(ticker=ticker)
-
-            df_pd = stock.history(period=period, interval=interval)
-
-            if df_pd.empty:
-                raise StockNotFoundException(ticker=ticker, message=f"There is no history with given ticker")
-
-            df = pl.from_pandas(df_pd.reset_index())
+            df = await StockRepository._fetch_raw_stock_df(ticker=ticker , period=period)
 
             time_col = "Date" if "Date" in df.columns else "Datetime"
 
@@ -113,19 +108,29 @@ class StockRepository():
             raise YfinanceApiException(technical_detail=str(e))
 
     @staticmethod
-    def get_watchlist():
+    async def _fetch_raw_stock_df(ticker: str, period: str):
+        """
+        Fetch data from yfinance returns raw polars dataframe
+        """
+        if not ticker.endswith(".IS"):
+            ticker += ".IS"
+
+        interval = IndicatorCalculationUtils.interval_calculator(period=period)
+        stock = yfinance.Ticker(ticker=ticker)
+        df_pd = stock.history(period=period, interval=interval)
+
+        if df_pd.empty:
+            raise StockNotFoundException(ticker=ticker, message="History not found")
+
+        # convert to polars from pandas and convert index(date) to column
+        return pl.from_pandas(df_pd.reset_index())
+
+    @staticmethod
+    def get_watchlist(session: Session):
         try:
-            top_volume_stocks_list = []
-            with Session(engine) as session:
-                result = session.exec(select(TopVolumeStocksModel))
-                for item in result:
-                    top_volume_stocks_list.append(
-                        {
-                            "symbol": item.symbol,
-                            "price": item.price,
-                            "trade_value": item.trade_value
-                        }
-                    )
+
+            return session.exec(select(TopVolumeStocksModel)).all()
+
         except Exception as e:
             logger.error(f"An error occurded: {e}")
             raise e
@@ -139,16 +144,21 @@ class StockRepository():
                 old_stocks = session.exec(select(TopVolumeStocksModel))
                 for old_stock in old_stocks:
                     session.delete(old_stock)
+                session.commit()
                 logger.info("old top 10 volume stocks successfully deleted")
-                all_symbols_global = session.exec(select(MasterTicker))
+                all_symbols_global = session.exec(select(MasterTicker.symbol)).all()
 
+            if not all_symbols_global:
+                raise Exception("MasterTicker is empty or all symbols is empty")
             data = yfinance.download(all_symbols_global, period="2d", group_by="ticker")
+            if data.empty:
+                logger.error("Yfinance couldn't downloaded any data maybe stock market is not available")
 
             volume_list = []
 
             for ticker in all_symbols_global:
                 stock = data[ticker]
-                if not stock.empty and len(stock) >= 2:
+                if not stock.empty and len(stock) >= 0:
                     volume = stock["Volume"].iloc[-1]
                     current_close = stock["Close"].iloc[-1]
                     prev_close = stock["Close"].iloc[-2]
@@ -173,8 +183,9 @@ class StockRepository():
 
             with Session(engine) as session:
                 for stock in top_10_stocks:
-                    single_row = TopVolumeStocksModel(symbol=stock.get("symbol"), price=stock.get("price"), trade_value=stock.get("trade_value"))
+                    single_row = TopVolumeStocksModel(symbol=stock.get("symbol"), price=stock.get("price"), trade_value=stock.get("trade_value") , changePercent = stock.get("changePercent"))
                     session.add(single_row)
+                session.commit()
             logger.info("Top 10 volume stocks updated")
         except Exception as e:
             logger.error(f"An error occurded {e}")
@@ -183,7 +194,17 @@ class StockRepository():
 
 
     @staticmethod
-    async def get_multiple_indicators():
-        ...
-        #TODO complete here
+    async def get_single_stock_indicators(ticker: str , indicator_settings: GetSingleStockIndicatorModel):
+        cached_val = redis_manager.getIndicatorDict(name=ticker)
+        if cached_val:
+            return cached_val
+
+        df = await StockRepository._fetch_raw_stock_df(ticker=ticker, period="1mo")
+
+        calculated_indicators = IndicatorService.compute_all_logic(df=df,**indicator_settings.model_dump())
+
+        #TODO redis e yazma işini hallet exception ekle bu kısmı bitir sonra en çok artan hisseleride döndüren backendi yaz
+
+
+
 
