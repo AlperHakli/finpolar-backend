@@ -1,19 +1,25 @@
+import asyncio
+import datetime
 import json
 import os
-
+from typing import Type
+from datetime import date
 import yfinance
 import logging
-
+import hashlib
 import polars as pl
 import pandas as pd
-from sqlmodel import Session , select
+import time
+
+from sqlalchemy import text, func
+from sqlmodel import Session , select , update
 from project.logic.exceptions import StockNotFoundException, YfinanceApiException
 from project.logic.utils import IndicatorCalculationUtils
-from project.api.base_models import TopVolumeStocksModel , MasterTicker , GetSingleStockIndicatorModel
+from project.api.base_models import StockStats , GetSingleStockIndicatorModel , StatBase
 from project.logic.indicator_service import IndicatorService
 from project.api.redis_client import redis_manager
 from project.api.database import engine
-from project.api.repository.analysis_repo import S
+
 
 
 
@@ -77,6 +83,7 @@ class StockRepository():
             logger.error(f"Error when get_single_stock {ticker} detail: {e}")
             raise YfinanceApiException(technical_detail=str(e))
 
+
     @staticmethod
     async def get_single_stock_history(ticker: str, period: str):
         """
@@ -128,82 +135,294 @@ class StockRepository():
     @staticmethod
     def get_watchlist(session: Session):
         try:
+            tempdict = {
+                "top_volume":redis_manager.getRedis("market:top_volume"),
+                "top_gainers":redis_manager.getRedis("market:top_gainers"),
+                "top_losers":redis_manager.getRedis("market:top_losers")
 
-            return session.exec(select(TopVolumeStocksModel)).all()
+            }
+            return tempdict
+
+
 
         except Exception as e:
             logger.error(f"An error occurded: {e}")
             raise e
 
     @staticmethod
-    def update_top_volume_stocks():
+    def update_realtime_stock_highlights(database_model: Type[StatBase], chunk_size: int = 100 , sleep_time: float = 0.1):
+        """
+        Writes most increased and decreased 10 stocks and writes top 10 stocks that have the most volume to redis
+        Updates peRatio of stock
+        """
         try:
-            all_symbols_global = []
-            logger.info("update top 10 volume stocks initialized")
-            with Session(engine) as session:
-                old_stocks = session.exec(select(TopVolumeStocksModel))
-                for old_stock in old_stocks:
-                    session.delete(old_stock)
-                session.commit()
-                logger.info("old top 10 volume stocks successfully deleted")
-                all_symbols_global = session.exec(select(MasterTicker.symbol)).all()
-
-            if not all_symbols_global:
-                raise Exception("MasterTicker is empty or all symbols is empty")
-            data = yfinance.download(all_symbols_global, period="2d", group_by="ticker")
-            if data.empty:
-                logger.error("Yfinance couldn't downloaded any data maybe stock market is not available")
-
-            volume_list = []
-
-            for ticker in all_symbols_global:
-                stock = data[ticker]
-                if not stock.empty and len(stock) >= 0:
-                    volume = stock["Volume"].iloc[-1]
-                    current_close = stock["Close"].iloc[-1]
-                    prev_close = stock["Close"].iloc[-2]
-
-                    if pd.isna(volume) or pd.isna(current_close) or volume <= 0:
-                        continue
-
-                    trade_value = volume * current_close
-
-                    change_percent = IndicatorCalculationUtils.change_percent_calculator(current_close=current_close, prev_close=prev_close)
-
-                    volume_list.append(
-                        {
-                            "symbol": ticker.replace(".IS", ""),
-                            "price": round(float(current_close), 2),
-                            "trade_value": float(trade_value),
-                            "changePercent": round(float(change_percent), 2),
-                        }
-                    )
-
-            top_10_stocks = sorted(volume_list, key=lambda x: x["trade_value"], reverse=True)[:10]
+            if not IndicatorCalculationUtils.work_time_controller():
+                return
 
             with Session(engine) as session:
-                for stock in top_10_stocks:
-                    single_row = TopVolumeStocksModel(symbol=stock.get("symbol"), price=stock.get("price"), trade_value=stock.get("trade_value") , changePercent = stock.get("changePercent"))
-                    session.add(single_row)
-                session.commit()
-            logger.info("Top 10 volume stocks updated")
+                all_stocks = session.exec(select(database_model)).all()
+
+            if not all_stocks:
+                logger.error("No stocks found in database to update highlights")
+                return
+
+            stat_list = []
+            symbols = [s.symbol for s in all_stocks]
+
+            prev_close_map = {s.symbol: s.previous_close for s in all_stocks}
+            name_map = {s.symbol :  s.name for s in all_stocks}
+
+
+            for i in range(0, len(symbols), chunk_size):
+                chunk = symbols[i: i + chunk_size]
+                logger.info(f"Realtime processing chunk: {len(chunk)} symbols")
+
+
+                data = yfinance.download(chunk, period="1d", group_by="ticker", progress=False)
+
+                if data.empty:
+                    logger.error("yfinance data is empty on update_realtime_stock_highlights")
+                    continue
+
+                for ticker in chunk:
+                    try:
+                        if ticker not in data or data[ticker].empty:
+                            continue
+
+                        stock = data[ticker]
+                        current_close = stock["Close"].iloc[-1]
+                        volume = stock["Volume"].iloc[-1]
+
+
+                        prev_close = prev_close_map.get(ticker)
+
+                        stock_name = name_map.get(ticker)
+
+                        if pd.isna(volume) or pd.isna(current_close) or volume <= 0 or not prev_close:
+                            continue
+
+
+                        trade_value = volume * current_close
+
+                        change_percent = ((current_close - prev_close) / prev_close) * 100
+
+                        stat_list.append(
+                            {
+                                "symbol": ticker.replace(".IS", ""),
+                                "name": stock_name,
+                                "price": round(float(current_close), 2),
+                                "trade_value": float(trade_value),
+                                "changePercent": round(float(change_percent), 2),
+                            }
+                        )
+                    except Exception as inner_e:
+                        logger.warning(f"Error processing {ticker} in realtime: {inner_e}")
+
+                time.sleep(sleep_time)
+
+            if not stat_list:
+                logger.error("stat list is empty on update_realtime_stock_highlights")
+                return
+
+            #sortings
+            top_volume = sorted(stat_list, key=lambda x: x["trade_value"], reverse=True)[:10]
+            top_gainers = sorted(stat_list, key=lambda x: x["changePercent"], reverse=True)[:10]
+            top_losers = sorted(stat_list, key=lambda x: x["changePercent"])[:10]
+
+            #write to redis
+            async def push_to_redis():
+                await redis_manager.setRedis(name="market:top_volume", value=top_volume)
+                await redis_manager.setRedis(name="market:top_gainers", value=top_gainers)
+                await redis_manager.setRedis(name="market:top_losers", value=top_losers)
+
+            asyncio.run(push_to_redis())
+
+            logger.info(f"Highlights updated successfully with {len(stat_list)} stocks.")
+
+        except Exception as e:
+            logger.error(f"Realtime highlights error: {e}")
+
+    @staticmethod
+    def _fetch_symbols_from_postresql(database_model: Type[StatBase]) -> list[str]:
+        """
+        :param database_model: postresql table
+        :return: symbol list
+        """
+        try:
+            with Session(engine) as session:
+                statement = select(database_model.symbol)
+                result = session.exec(statement).all()
+                return result
         except Exception as e:
             logger.error(f"An error occurded {e}")
             raise e
 
 
+    @staticmethod
+    def _update_long_time_ticker_metrics(
+            chunk_size: int, sleep_time: int, symbols: list[str], database_model: Type[StatBase], stats: dict , use_fast_info = True
+            ):
+        """
+        Updates long time stock stats
+        :param use_fast_info: determines the function will use ticker.info or ticker.get_fast_info (if true is uses get_fast_info)
+        :param chunk_size: size of each batch when downloading data from yfinance
+        :param sleep_time: wait time between each batch (seconds)
+        :param symbols: symbols of stocks , crypto etc.
+        :param database_model: database table model
+        :param stats: stats that will update example: {"stat_name_at_database_model":"stat_name_at_yfinance_info"}
+        :return:
+        """
+        try:
+            with Session(engine) as session:
+                for i in range(0, len(symbols), chunk_size):
+                    chunk = symbols[i: i + chunk_size]
+                    logger.info(f"Processing chunk on daily update: {len(chunk)} symbols")
+
+                    for symbol in chunk:
+                        try:
+                            ticker = yfinance.Ticker(ticker=symbol)
+                            info = ticker.get_fast_info() if use_fast_info else ticker.info
+
+
+                            update_values = {}
+                            for db_column, yf_field in stats.items():
+                                value = info.get(yf_field)
+
+
+                                if value is not None:
+                                    if use_fast_info:
+                                        value = getattr(info, yf_field, None)
+                                    else:
+                                        value = info.get(yf_field)
+
+                                    if value is not None:
+                                        if isinstance(value, (float, int)):
+                                            update_values[db_column] = round(float(value), 2)
+                                        else:
+                                            update_values[db_column] = value
+
+
+                            if update_values:
+                                statement = (
+                                    update(database_model)
+                                    .where(database_model.symbol == symbol)
+                                    .values(**update_values)
+                                )
+                                session.exec(statement)
+
+                        except Exception as inner_e:
+                            logger.warning(f"Error fetching info for {symbol}: {inner_e}")
+
+
+                    session.commit()
+                    logger.info(f"Chunk completed and committed.")
+                    time.sleep(sleep_time)
+
+        except Exception as e:
+            logger.error(f"Global error in _update_long_time_ticker_metrics: {e}")
+            raise e
 
     @staticmethod
-    async def get_single_stock_indicators(ticker: str , indicator_settings: GetSingleStockIndicatorModel):
-        cached_val = redis_manager.getIndicatorDict(name=ticker)
-        if cached_val:
-            return cached_val
+    def _recalculate_all_pe_ratios(database_model: Type[StatBase] = StockStats):
+        """
+        uses eps and previous_close to calculate peRatio
+        """
+        try:
+            with Session(engine) as session:
 
-        df = await StockRepository._fetch_raw_stock_df(ticker=ticker, period="1mo")
+                statement = (
+                    update(StockStats)
+                    .where(
+                        StockStats.eps != None , StockStats.eps != 0
+                    )
+                    .values(
+                        # Formülü buraya yazıyoruz: PE = Price / EPS
+                        peRatio=func.round(StockStats.previous_close / StockStats.eps, 2)
+                    )
+                )
+                session.exec(statement)
+                session.commit()
+                logger.info("All PE Ratios recalculated successfully via SQL.")
+        except Exception as e:
+            logger.error(f"Error recalculating PE Ratios: {e}")
 
-        calculated_indicators = IndicatorService.compute_all_logic(df=df,**indicator_settings.model_dump())
 
-        #TODO redis e yazma işini hallet exception ekle bu kısmı bitir sonra en çok artan hisseleride döndüren backendi yaz
+
+
+
+    @staticmethod
+    def daily_job(
+            database_model: Type[StatBase],
+            chunk_size: int,
+            sleep_time: int,
+            stats: dict,
+            use_fast_info: bool = True
+    ):
+        """
+        Uses yfinance_info or yfinance.get_fast_info to updates stock stats
+
+        :param use_fast_info: determines the function will use ticker.info or ticker.get_fast_info (if true is uses get_fast_info)
+        :param database_model: table model of database
+        :param chunk_size: batch size when download stock data from yfinance
+        :param sleep_time: sleep time between each batch
+        :param stats: stats that will update example: {"stat_name_at_database_model":"stat_name_at_yfinance_info"}
+        :return:
+        """
+        symbols = StockRepository._fetch_symbols_from_postresql(database_model=database_model)
+
+        StockRepository._update_long_time_ticker_metrics(
+            chunk_size=chunk_size ,
+            sleep_time=sleep_time ,
+            database_model=database_model ,
+            stats=stats ,
+            symbols=symbols,
+            use_fast_info=use_fast_info
+        )
+
+        StockRepository._recalculate_all_pe_ratios()
+
+
+
+
+    @staticmethod
+    async def get_single_stock_indicators(ticker: str , period: str ,  indicator_settings: GetSingleStockIndicatorModel):
+        "Calculates multiple indicator for single stock"
+        try:
+            ticker = ticker.upper()
+
+            settings_dict = indicator_settings.model_dump()
+
+            cache_data = {**settings_dict, "period": period}
+            settings_json = json.dumps(cache_data , sort_keys=True)
+            settings_hash = hashlib.md5(settings_json.encode()).hexdigest()
+
+
+            cache_key = f"stock:{ticker}:settings:{settings_hash}"
+
+            cached_val = redis_manager.getRedis(name=cache_key)
+
+            if cached_val:
+                logger.info("Cache hit on multiple indicator calculation")
+                return cached_val
+            logger.info("Cache miss on multiple indicator calculation calculating indicators ... ")
+
+
+
+            df = await StockRepository._fetch_raw_stock_df(ticker=ticker, period=period)
+
+            calculated_indicators = await IndicatorService.compute_all_logic(df=df, **settings_dict)
+
+            logger.info("Multiple indicator calculation has been completed")
+
+            await redis_manager.setRedis(name=cache_key, value=calculated_indicators)
+
+            return calculated_indicators
+
+        except Exception as e:
+            logger.error(f"An error occurded: {e}")
+            raise e
+
+
 
 
 

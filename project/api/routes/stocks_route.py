@@ -7,12 +7,12 @@ from sqlmodel import Session
 router = APIRouter(prefix="/stocks", tags=["Stock Operations"])
 
 
-@router.get("/list")
-async def list_stocks():
-    """
-    Fetch all stocks
-    """
-    return await StockRepository.get_all_stocks()
+# @router.get("/list")
+# async def list_stocks():
+#     """
+#     Fetch all stocks
+#     """
+#     return await StockRepository.get_all_stocks()
 
 
 @router.get("/stock-detail")
@@ -31,11 +31,17 @@ async def stock_history(ticker: str , period: str):
 
 @router.get("/single-stock-indicators")
 async def get_single_stock_indicators(ticker: str , indicator_settings: GetSingleStockIndicatorModel):
-    return await StockRepository.get_single_stock_indicators()
+    return await StockRepository.get_single_stock_indicators(ticker=ticker , indicator_settings=indicator_settings)
 
 @router.get("/watchlist")
 def fetch_watchlist(session: Session = Depends(get_session)):
     """
-    Fetch top 10 active stocks
+    Fetch top 10 active , top 10 gainers , top 10 losers
+    example output:
+    {
+    top_volume:top10volume,
+    top_gainers:top10gainers,
+    top_losers:top10losers
+    }
     """
     return StockRepository.get_watchlist(session=session)

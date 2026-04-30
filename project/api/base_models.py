@@ -22,13 +22,29 @@ class GetSingleStockIndicatorModel(BaseModel):
 
 #database models
 
-class TopVolumeStocksModel(SQLModel , table= True):
-    id: int | None = Field(default=None , primary_key= True)
-    symbol: str = Field(description="symbol of ticker")
-    price: float = Field(description="price of stock")
-    trade_value: float = Field(description="trade value of stock")
-    changePercent: float = Field(description="Change percent between prev close and current close")
 
-class MasterTicker(SQLModel , table= True):
+#base stat model
+class StatBase(SQLModel):
+    # -- Constant features --
     id: int | None = Field(default=None , primary_key = True)
-    symbol: str = Field(default=None)
+    symbol: str = Field(index=True,default=None,unique=True)
+    name:str = Field(default=None)
+
+    # updates daily
+    previous_close: float = Field(default=0.0 , description="previous close value")
+
+    #updates one time in 3 days
+    marketCap: str = Field(default=None)
+    year_high:float = Field(default=None , description="highest price in current year")
+    year_low: float = Field(default=None , description="lowest price in current year")
+
+
+#stock stats model
+class StockStats(StatBase , table= True):
+    # -- Constant features --
+    # -- Dynamic features --
+    peRatio: float = Field(default=None)
+    #updated one time in 7 days
+    sector: str = Field(default=None)
+    summary: str = Field(default=None)
+    eps: float = Field(default= None)

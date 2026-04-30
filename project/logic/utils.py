@@ -1,7 +1,11 @@
 import polars as pl
+from datetime import datetime
+import logging
 from functools import wraps
 from project.logic.constants import ALL_TOOLS , ANALYSIS_TOOLS
 from project.logic.exceptions import DataTypeException
+
+logger = logging.getLogger(__name__)
 
 class ToolWrapper:
     @staticmethod
@@ -90,6 +94,28 @@ class IndicatorCalculationUtils:
         """
         change_percent = ((current_close - prev_close) / prev_close) * 100
         return round(change_percent, 2)
+
+    @staticmethod
+    def work_time_controller()\
+            ->bool:
+        """
+        Controls if stock market is open or not
+        True = Open , False Closed
+        """
+        now = datetime.now()
+        # is weekend
+        if now.weekday() >= 5:
+            logger.info("Stock market is not available (weekend) skipping update...")
+            return False
+
+        # Out of work times?
+        current_time = now.strftime("%H:%M")
+        if not ("09:40" <= current_time <= "18:15"):
+            logger.info("Stock market is not available (Out of work hours) skipping update...")
+            return False
+
+        return True
+
 
 
 
