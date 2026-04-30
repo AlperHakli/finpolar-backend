@@ -29,11 +29,16 @@ async def lifespan(app: FastAPI):
     scheduler = BackgroundScheduler()
 
     scheduler.add_job(
-        StockRepository.update_realtime_stock_highlights,
-        trigger="date",
-        kwargs={"database_model": StockStats, "chunk_size": settings.REALTIME_UPDATE_CHUNK_SIZE,
-                "sleep_time": settings.REALTIME_UPDATE_SLEEP_TIME}
+        StockRepository.daily_job, trigger="date",
+        kwargs={
+            "database_model": StockStats, "chunk_size": settings.VERY_LONG_TIME_CHUNK_SIZE,
+            "sleep_time": settings.VERY_LONGTIME_UPDATE_SLEEP_TIME,
+            "stats": settings.VERY_LONGTIME_UPDATE_STATS,
+            "use_fast_info": False,
+
+        }
     )
+
 
     scheduler.add_job(
         StockRepository.daily_job, trigger="date",
@@ -54,15 +59,13 @@ async def lifespan(app: FastAPI):
         }
     )
 
-    scheduler.add_job(
-        StockRepository.daily_job, trigger="date",
-        kwargs={
-            "database_model": StockStats, "chunk_size": settings.VERY_LONG_TIME_CHUNK_SIZE,
-            "sleep_time": settings.VERY_LONGTIME_UPDATE_SLEEP_TIME,
-            "stats": settings.VERY_LONGTIME_UPDATE_STATS,
-            "use_fast_info": False,
 
-        }
+
+    scheduler.add_job(
+        StockRepository.update_realtime_stock_highlights,
+        trigger="date",
+        kwargs={"database_model": StockStats, "chunk_size": settings.REALTIME_UPDATE_CHUNK_SIZE,
+                "sleep_time": settings.REALTIME_UPDATE_SLEEP_TIME}
     )
 
     scheduler.add_job(

@@ -11,7 +11,7 @@ import polars as pl
 import pandas as pd
 import time
 
-from sqlalchemy import text, func
+from sqlalchemy import text, func, Numeric, cast
 from sqlmodel import Session , select , update
 from project.logic.exceptions import StockNotFoundException, YfinanceApiException
 from project.logic.utils import IndicatorCalculationUtils
@@ -322,30 +322,28 @@ class StockRepository():
             logger.error(f"Global error in _update_long_time_ticker_metrics: {e}")
             raise e
 
+    from sqlalchemy import func, cast, Numeric
+    from sqlmodel import update
+
+    from sqlalchemy import text
+
     @staticmethod
-    def _recalculate_all_pe_ratios(database_model: Type[StatBase] = StockStats):
-        """
-        uses eps and previous_close to calculate peRatio
-        """
+    def _recalculate_all_pe_ratios():
         try:
             with Session(engine) as session:
-
-                statement = (
-                    update(StockStats)
-                    .where(
-                        StockStats.eps != None , StockStats.eps != 0
+                # Postgres'in ::numeric kısayolunu kullanarak en kesin çözümü yazıyoruz
+                query = text(
+                    """
+                    UPDATE stockstats 
+                    SET "peRatio" = ROUND(("previous_close" / "eps")::numeric, 2)
+                    WHERE "eps" IS NOT NULL AND "eps" != 0;
+                """
                     )
-                    .values(
-                        # Formülü buraya yazıyoruz: PE = Price / EPS
-                        peRatio=func.round(StockStats.previous_close / StockStats.eps, 2)
-                    )
-                )
-                session.exec(statement)
+                session.execute(query)
                 session.commit()
-                logger.info("All PE Ratios recalculated successfully via SQL.")
+                logger.info("All PE Ratios recalculated successfully via Raw SQL.")
         except Exception as e:
-            logger.error(f"Error recalculating PE Ratios: {e}")
-
+            logger.error(f"Error: {e}")
 
 
 

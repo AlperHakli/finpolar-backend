@@ -54,7 +54,6 @@ class Settings():
         "previous_close":"previous_close",
     }
 
-    "peRatio": "peRatio"
 
 
 
