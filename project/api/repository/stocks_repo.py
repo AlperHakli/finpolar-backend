@@ -11,8 +11,7 @@ import polars as pl
 import pandas as pd
 import time
 
-from sqlalchemy import text, func, Numeric, cast
-from sqlmodel import Session , select , update
+from sqlmodel import Session , select , update , func
 from project.logic.exceptions import StockNotFoundException, YfinanceApiException
 from project.logic.utils import IndicatorCalculationUtils
 from project.api.base_models import StockStats , GetSingleStockIndicatorModel , StatBase
@@ -82,7 +81,6 @@ class StockRepository():
         except Exception as e:
             logger.error(f"Error when get_single_stock {ticker} detail: {e}")
             raise YfinanceApiException(technical_detail=str(e))
-
 
     @staticmethod
     async def get_single_stock_history(ticker: str, period: str):
@@ -322,31 +320,19 @@ class StockRepository():
             logger.error(f"Global error in _update_long_time_ticker_metrics: {e}")
             raise e
 
-    from sqlalchemy import func, cast, Numeric
-    from sqlmodel import update
-
-    from sqlalchemy import text
-
     @staticmethod
-    def _recalculate_all_pe_ratios():
+    def _recalculate_all_pe_ratios(database_model : Type[StatBase] = StockStats):
         try:
-            with Session(engine) as session:
-                # Postgres'in ::numeric kısayolunu kullanarak en kesin çözümü yazıyoruz
-                query = text(
-                    """
-                    UPDATE stockstats 
-                    SET "peRatio" = ROUND(("previous_close" / "eps")::numeric, 2)
-                    WHERE "eps" IS NOT NULL AND "eps" != 0;
-                """
-                    )
-                session.execute(query)
+            with (Session(engine) as session):
+
+                statement = update(database_model).where(database_model.eps != None , database_model.eps != 0).values(peRatio=func.round(database_model.previous_close / database_model.eps , 2))
+
+                results = session.exec(statement)
+
                 session.commit()
                 logger.info("All PE Ratios recalculated successfully via Raw SQL.")
         except Exception as e:
             logger.error(f"Error: {e}")
-
-
-
 
     @staticmethod
     def daily_job(
@@ -419,6 +405,36 @@ class StockRepository():
         except Exception as e:
             logger.error(f"An error occurded: {e}")
             raise e
+
+
+    @staticmethod
+    def seed_database(arguments:dict , database_model: Type[StatBase]):
+        """
+        Initialize Statbase with name and ticker code
+        :param arguments: {stock_or_crypto_symbol:stock_or_crypto_name}
+        """
+        try:
+            with Session(engine) as session:
+                statement = select(func.count()).select_from(database_model)
+                count = session.exec(statement).one()
+
+                if count > 0:
+                    logger.info(f"Database already initialized skipping {database_model}")
+
+                logger.info(f"Initializing database {database_model}")
+
+                for symbol, name in arguments.items():
+                    statement = update(database_model).values(symbol=symbol, name=name)
+                    session.exec(statement)
+        except Exception as e:
+            logger.error(f"An error occurded while initializing database {e}")
+
+
+
+
+
+
+
 
 
 

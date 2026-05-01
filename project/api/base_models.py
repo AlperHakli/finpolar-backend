@@ -27,6 +27,7 @@ class GetSingleStockIndicatorModel(BaseModel):
 class StatBase(SQLModel):
     # -- Constant features --
     id: int | None = Field(default=None , primary_key = True)
+    # -- Updated only once --
     symbol: str = Field(index=True,default=None,unique=True)
     name:str = Field(default=None)
 
