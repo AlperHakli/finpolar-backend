@@ -1,3 +1,5 @@
+import random
+
 import polars as pl
 from datetime import datetime
 import logging
@@ -115,6 +117,13 @@ class IndicatorCalculationUtils:
             return False
 
         return True
+    @staticmethod
+    def add_random_seconds_to_sleep_time_between_chunks(sleep_time:float):
+        """
+        as it says , it adds random seconds to given variable
+        """
+        randomvariable = random.uniform(0.3 , 1.2)
+        return sleep_time + randomvariable
 
 
 

@@ -1,6 +1,6 @@
 import asyncio
 
-from fastapi import APIRouter , Request
+from fastapi import APIRouter , Request , Depends
 from fastapi.responses import StreamingResponse
 from project.api.base_models import AnalysisModel
 from project.api.repository.analysis_repo import AnalysisRepo

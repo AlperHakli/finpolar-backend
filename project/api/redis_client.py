@@ -16,9 +16,21 @@ class RedisClient():
         )
 
     async def setRedis(self, name:str, value: dict, exp:int = 300):
+        """
+        Writes data to redis
+        """
         await self.connect()  # Connect if connection does not exist
         json_value = json.dumps(value)
         await self.redis_client.set(name= name , value=value , ex = exp)
+
+    async def setRedisNoExp(self, name:str, value: dict):
+        """
+        Writes data to redis without an expiration date
+        """
+        await self.connect()  # Connect if connection does not exist
+        json_value = json.dumps(value)
+        await self.redis_client.set(name= name , value=value)
+
 
     async def getRedis(self, name:str):
         await self.connect()

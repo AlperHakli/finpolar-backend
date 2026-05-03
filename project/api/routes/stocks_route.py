@@ -20,7 +20,7 @@ async def stock_details(ticker: str):
     """
     Fetch specified stock details (except history)
     """
-    return await StockRepository.get_single_stock(ticker=ticker)
+    return await StockRepository.get_single_asset(ticker=ticker)
 
 @router.get("/stock-history")
 async def stock_history(ticker: str , period: str):

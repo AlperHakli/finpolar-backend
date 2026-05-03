@@ -28,24 +28,24 @@ class StatBase(SQLModel):
     # -- Constant features --
     id: int | None = Field(default=None , primary_key = True)
     # -- Updated only once --
-    symbol: str = Field(index=True,default=None,unique=True)
-    name:str = Field(default=None)
+    symbol: str = Field(index=True,default="none",unique=True)
+    name:str = Field(default="none")
 
     # updates daily
     previous_close: float = Field(default=0.0 , description="previous close value")
 
     #updates one time in 3 days
-    marketCap: str = Field(default=None)
-    year_high:float = Field(default=None , description="highest price in current year")
-    year_low: float = Field(default=None , description="lowest price in current year")
+    marketCap: float = Field(default=0.0)
+    year_high:float = Field(default=0.0 , description="highest price in current year")
+    year_low: float = Field(default=0.0 , description="lowest price in current year")
 
 
 #stock stats model
 class StockStats(StatBase , table= True):
     # -- Constant features --
     # -- Dynamic features --
-    peRatio: float = Field(default=None)
+    trailingPE: float = Field(default=0.0)
     #updated one time in 7 days
-    sector: str = Field(default=None)
-    summary: str = Field(default=None)
-    eps: float = Field(default= None)
+    sector: str = Field(default="none")
+    summary: str = Field(default="none")
+    eps: float = Field(default= 0.0)
