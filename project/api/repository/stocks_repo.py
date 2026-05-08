@@ -1,27 +1,18 @@
 import asyncio
-import datetime
 import json
-import os
 from typing import Type
-from datetime import date
 import yfinance
 import logging
 import hashlib
 import polars as pl
 import pandas as pd
-import time
-
-from sqlmodel import Session , select , update , func , Numeric
-from project.logic.exceptions import StockNotFoundException, YfinanceApiException , SeedFileNotFoundException
-from project.logic.utils import IndicatorCalculationUtils
-from project.api.base_models import StockStats , GetSingleStockIndicatorModel , StatBase
+from sqlmodel import select, update, func, Numeric, delete, col
+from project.logic.exceptions import StockNotFoundException, YfinanceApiException, SeedFileNotFoundException
+from project.logic.utils import IndicatorCalculationUtils, HelperFunctions
+from project.api.base_models import StockStats, GetSingleStockIndicatorModel, StatBase
 from project.logic.indicator_service import IndicatorService
-from project.api.redis_client import redis_manager
-from project.api.database import engine
+from project.api.redis_client import RedisClient
 from sqlalchemy.ext.asyncio import AsyncSession
-
-
-
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +23,7 @@ class StockRepository():
             symbol: str,
             database_session: AsyncSession,
             database_model: type[StatBase] = StockStats,
-    )->dict:
+    ) -> dict:
         """
         Fetch Information about an asset from persistent database (except history)
         :param symbol: symbol of relevant asset
@@ -42,49 +33,46 @@ class StockRepository():
         """
 
         try:
-                statement = select(database_model).where(database_model.symbol == symbol)
-                result = await database_session.execute(statement)
 
-                asset = result.scalars().one_or_none()
+            statement = select(database_model).where(database_model.symbol == symbol)
+            result = await database_session.execute(statement)
 
-                if not asset:
-                    raise StockNotFoundException(message=f"No stock data found with given database")
+            asset = result.scalar_one_or_none()
 
-                return asset.model_dump(exclude=["id"])
+            if not asset:
+                raise StockNotFoundException(message=f"No stock data found with given database", ticker=symbol)
+
+            return asset.model_dump(exclude=["id"])
 
 
         except StockNotFoundException:
             logger.warning(f"Invalid or missing ticker when get_single_stock : {symbol}")
             raise
 
-
-            # name = result.get("name")
-            # previousClose = result.get("previousClose")
-            # sector = result.get("sector")
-            # marketcap = result.get("marketCap")
-            # peRatio = result.get("trailingPE")
-            # summary = result.get("summary", "No description available.")
-            # symbol = result.get("symbol")
-            # year_high = result.get("year_high")
-            # year_low = result.get("year_low")
-
-
-
     @staticmethod
-    async def get_single_asset_realtime_data(symbol: str, stats: list[str]) ->dict:
+    async def get_single_asset_realtime_data(
+            symbol: str,
+            redis_manager: RedisClient,
+            stats: list[str]
+
+    ) -> dict:
         """
-        Fetch Information about an asset from redis database
+        Fetch real time information about an asset from redis database or yfinance
+        :param redis_manager: redis database manager
+        :param symbol: relevant asset's symbol
+        :param stats: stats that will fetch from yfinance.fast_info must same with yfinance.fast_info attributes
         """
         attributes = {}
         missing_stats = []
         for stat in stats:
-            result = redis_manager.getRedis(f"stock:{symbol}:{stat}")
+            result = await redis_manager.getRedis(f"stock:{symbol}:{stat}")
             if result is not None:
                 attributes[stat] = result
-            else: missing_stats.append(stat)
+            else:
+                missing_stats.append(stat)
 
         if missing_stats:
-            def get_info(missing_stats_inner: list[str] , symbol: str):
+            def get_info(missing_stats_inner: list[str], symbol: str):
                 fresh_data = {}
                 info = yfinance.Ticker(ticker=symbol).fast_info
                 for stat in missing_stats_inner:
@@ -96,19 +84,22 @@ class StockRepository():
                         continue
                 return fresh_data
 
-            new_data = await asyncio.to_thread(get_info , missing_stats , symbol)
+            new_data = await asyncio.to_thread(get_info, missing_stats, symbol)
 
             for stat, val in new_data.items():
                 attributes[stat] = val
 
-                redis_manager.setRedis(f"stock:{symbol}:{stat}", val, expire=30)
+                await redis_manager.setRedis(f"stock:{symbol}:{stat}", val, exp=30)
 
         return attributes
+
     @staticmethod
-    async def get_single_stock_information_master(
-            symbol:str,
-            database_model:type[StatBase],
-            redis_stats:list[str],
+    async def get_single_asset_information_master(
+            symbol: str,
+            database_model: type[StatBase],
+            database_session: AsyncSession,
+            redis_manager: RedisClient,
+            redis_stats: list[str],
     ):
         """
         Merges both single stock postresql data and redis data
@@ -117,24 +108,26 @@ class StockRepository():
         :param database_model: table model of persistent database
         """
 
-        redisresult = await StockRepository.get_single_asset_realtime_data(symbol=symbol, stats=redis_stats)
-        dbresult = await StockRepository.get_single_asset(symbol=symbol , database_model=database_model)
+        redisresult = await StockRepository.get_single_asset_realtime_data(symbol=symbol, stats=redis_stats, redis_manager=redis_manager)
+        dbresult = await StockRepository.get_single_asset(symbol=symbol, database_session=database_session, database_model=database_model)
 
+        currentPrice = redisresult.get("last_price", 0.0)
+        previousClose = dbresult.get("previousClose", 0.0)
 
+        if previousClose == 0:
 
+            changePercent = 0.0
+        else:
+            changePercent = IndicatorCalculationUtils.change_percent_calculator(currentPrice, previousClose)
 
+        changeDigit = currentPrice - previousClose
 
-        changePercent = IndicatorCalculationUtils.change_percent_calculator(current_close=currentPrice,
-                                                                            prev_close=previousClose)
-        short_summary = summary[:520] + "..." if len(summary) > 520 else summary
-        short_marketcap = IndicatorCalculationUtils.format_market_cap(marketcap)
-        formatted_symbol = IndicatorCalculationUtils.format_symbol(symbol)
-        changeDigit_raw = currentPrice - previousClose
-        changeDigit = f"{changeDigit_raw:.2f}"
-        currentPrice_edited = f"{currentPrice:.2f}"
+        newdict = {"changeDigit": changeDigit, "changePercent": changePercent}
+
+        return redisresult | dbresult | newdict
 
     @staticmethod
-    async def get_single_stock_history(ticker: str, period: str):
+    async def get_single_asset_history(ticker: str, period: str):
         """
         Fetch only history data of stock
         :param ticker: symbol of relevant stock
@@ -143,7 +136,7 @@ class StockRepository():
         """
         try:
 
-            df = await StockRepository._fetch_raw_stock_df(ticker=ticker , period=period)
+            df = await StockRepository._fetch_raw_stock_history_df(ticker=ticker, period=period)
 
             time_col = "Date" if "Date" in df.columns else "Datetime"
 
@@ -164,16 +157,14 @@ class StockRepository():
             raise YfinanceApiException(technical_detail=str(e))
 
     @staticmethod
-    async def _fetch_raw_stock_df(ticker: str, period: str):
+    async def _fetch_raw_stock_history_df(ticker: str, period: str):
         """
         Fetch data from yfinance returns raw polars dataframe
         """
-        if not ticker.endswith(".IS"):
-            ticker += ".IS"
 
         interval = IndicatorCalculationUtils.interval_calculator(period=period)
-        stock = yfinance.Ticker(ticker=ticker)
-        df_pd = stock.history(period=period, interval=interval)
+
+        df_pd = await asyncio.to_thread(HelperFunctions.fetch_history, ticker, period, interval)
 
         if df_pd.empty:
             raise StockNotFoundException(ticker=ticker, message="History not found")
@@ -182,38 +173,46 @@ class StockRepository():
         return pl.from_pandas(df_pd.reset_index())
 
     @staticmethod
-    def get_watchlist(session: Session):
-        try:
-            tempdict = {
-                "top_volume":redis_manager.getRedis("market:top_volume"),
-                "top_gainers":redis_manager.getRedis("market:top_gainers"),
-                "top_losers":redis_manager.getRedis("market:top_losers")
+    async def get_watchlist(redis_manager: RedisClient) -> dict:
+        """
 
-            }
-            return tempdict
+        :param redis_manager: redis database manager
+        :return:complete watchlist
+        """
+        tempdict = {
+            "top_volume": await redis_manager.getRedis("market:top_volume"),
+            "top_gainers": await redis_manager.getRedis("market:top_gainers"),
+            "top_losers": await redis_manager.getRedis("market:top_losers")
 
-
-
-        except Exception as e:
-            logger.error(f"An error occurded: {e}")
-            raise e
+        }
+        return tempdict
 
     @staticmethod
-    def update_realtime_stock_highlights(
+    async def update_realtime_stock_highlights(
             database_model: Type[StatBase],
-            database_session:
-            chunk_size: int = 100 ,
-            sleep_time: float = 0.5):
+            database_session: AsyncSession,
+            redis_manager: RedisClient,
+            chunk_size: int = 100,
+            sleep_time: float = 0.5
+    ):
         """
         Writes most increased and decreased 10 stocks and writes top 10 stocks that have the most volume to redis
-        Updates trailingPE of stock
+
+        :param database_model: database table model
+        :param database_session: current database session
+        :param redis_manager: redis database manager
+        :param chunk_size: determines how many assets will begin to process in single time
+        :param sleep_time: duration between chunks
+        :return:
         """
         try:
             if not IndicatorCalculationUtils.work_time_controller():
                 return
             sleep_time_rnd_added = IndicatorCalculationUtils.add_random_seconds_to_sleep_time_between_chunks(sleep_time=sleep_time)
-            with Session(engine) as session:
-                all_stocks = session.exec(select(database_model)).all()
+
+            statement = select(database_model)
+            result = await database_session.execute(statement)
+            all_stocks = result.scalars().all()
 
             if not all_stocks:
                 logger.error("No stocks found in database to update highlights")
@@ -222,16 +221,14 @@ class StockRepository():
             stat_list = []
             symbols = [s.symbol for s in all_stocks]
 
-            prev_close_map = {s.symbol: s.previous_close for s in all_stocks}
-            name_map = {s.symbol :  s.name for s in all_stocks}
-
+            prev_close_map = {s.symbol: s.previousClose for s in all_stocks}
+            name_map = {s.symbol: s.name for s in all_stocks}
 
             for i in range(0, len(symbols), chunk_size):
                 chunk = symbols[i: i + chunk_size]
                 logger.info(f"Realtime processing chunk: {len(chunk)} symbols")
 
-
-                data = yfinance.download(chunk, period="1d", group_by="ticker", progress=False)
+                data = await asyncio.to_thread(HelperFunctions.fetch_1d_history, chunk)
 
                 if data.empty:
                     logger.error("yfinance data is empty on update_realtime_stock_highlights")
@@ -246,7 +243,6 @@ class StockRepository():
                         current_close = stock["Close"].iloc[-1]
                         volume = stock["Volume"].iloc[-1]
 
-
                         prev_close = prev_close_map.get(ticker)
 
                         stock_name = name_map.get(ticker)
@@ -254,10 +250,9 @@ class StockRepository():
                         if pd.isna(volume) or pd.isna(current_close) or volume <= 0 or not prev_close:
                             continue
 
-
                         trade_value = volume * current_close
 
-                        change_percent = ((current_close - prev_close) / prev_close) * 100
+                        change_percent = IndicatorCalculationUtils.change_percent_calculator(current_close=current_close, prev_close=prev_close)
 
                         stat_list.append(
                             {
@@ -268,10 +263,12 @@ class StockRepository():
                                 "changePercent": round(float(change_percent), 2),
                             }
                         )
+
                     except Exception as inner_e:
                         logger.warning(f"Error processing {ticker} in realtime: {inner_e}")
+                logger.info(f"Realtime processing chunk: {len(chunk)} symbols has been successfully completed")
 
-                time.sleep(sleep_time_rnd_added)
+                await asyncio.sleep(sleep_time_rnd_added)
 
             if not stat_list:
                 logger.error("stat list is empty on update_realtime_stock_highlights")
@@ -283,12 +280,10 @@ class StockRepository():
             top_losers = sorted(stat_list, key=lambda x: x["changePercent"])[:10]
 
             #write to redis
-            async def push_to_redis():
-                await redis_manager.setRedisNoExp(name="market:top_volume", value=top_volume)
-                await redis_manager.setRedisNoExp(name="market:top_gainers", value=top_gainers)
-                await redis_manager.setRedisNoExp(name="market:top_losers", value=top_losers)
 
-            asyncio.run(push_to_redis())
+            await redis_manager.setRedisNoExp(name="market:top_volume", value=top_volume)
+            await redis_manager.setRedisNoExp(name="market:top_gainers", value=top_gainers)
+            await redis_manager.setRedisNoExp(name="market:top_losers", value=top_losers)
 
             logger.info(f"Highlights updated successfully with {len(stat_list)} stocks.")
 
@@ -296,25 +291,35 @@ class StockRepository():
             logger.error(f"Realtime highlights error: {e}")
 
     @staticmethod
-    def _fetch_symbols_from_postresql(database_model: Type[StatBase]) -> list[str]:
+    async def _fetch_symbols_from_database(
+            database_model: Type[StatBase],
+            database_session: AsyncSession
+
+    ) -> list[str]:
         """
-        :param database_model: postresql table
+        fetch only symbols from all assets
+        :param database_model: database table model
+        :param database_session: current database session
         :return: symbol list
         """
-        try:
-            with Session(engine) as session:
-                statement = select(database_model.symbol)
-                result = session.exec(statement).all()
-                return result
-        except Exception as e:
-            logger.error(f"An error occurded {e}")
-            raise e
 
+        statement = select(database_model.symbol)
+        execution = await database_session.execute(statement)
+        result = execution.scalars().all()
+        return result
 
     @staticmethod
-    def _update_long_time_ticker_metrics(
-            chunk_size: int, sleep_time: int, symbols: list[str], database_model: Type[StatBase], stats: dict , jobtype: str ,  use_fast_info = True
-            ):
+    async def _update_long_time_ticker_metrics(
+            chunk_size: int,
+            sleep_time: int,
+            symbols: list[str],
+            database_model: Type[StatBase],
+            database_session: AsyncSession,
+            stats: dict,
+            jobtype: str,
+            use_fast_info=True
+    ):
+
         """
         Updates long time stock redis_stats
         :param use_fast_info: determines the function will use ticker.info or ticker.get_fast_info (if true is uses get_fast_info)
@@ -325,84 +330,90 @@ class StockRepository():
         :param redis_stats: redis_stats that will update example: {"stat_name_at_database_model":"stat_name_at_yfinance_info or stat_name_at_yfinance.fast_info"}
         :return:
         """
+
+        def fetch_info(inner_ticker: yfinance.Ticker, inner_use_fast_info: bool, inner_stats: dict) -> dict:
+            """
+            fetch info from yfinance with respect to given stats
+            """
+            value = {}
+            if inner_use_fast_info:
+                info = inner_ticker.fast_info
+                for db_column, yf_field in inner_stats.items():
+                    value.update({db_column: info.__getattribute__(yf_field)})
+
+            else:
+                info = inner_ticker.info
+                for db_column, yf_field in inner_stats.items():
+                    value.update({db_column: info.get(yf_field)})
+
+            return value
+
         try:
-            with Session(engine) as session:
-                for i in range(0, len(symbols), chunk_size):
-                    chunk = symbols[i: i + chunk_size]
-                    logger.info(f"Processing chunk on {jobtype}: {len(chunk)} symbols")
+            remaining = len(symbols)
+            for i in range(0, len(symbols), chunk_size):
+                chunk = symbols[i: i + chunk_size]
+                logger.info(f"Processing chunk on {jobtype}: {len(chunk)} symbols")
 
-                    for symbol in chunk:
-                        try:
-                            ticker = yfinance.Ticker(ticker=symbol)
-                            info = ticker.fast_info if use_fast_info else ticker.info
+                for symbol in chunk:
+                    try:
+                        ticker = yfinance.Ticker(ticker=symbol)
 
+                        value = await asyncio.to_thread(fetch_info, ticker, use_fast_info, stats)
 
-                            update_values = {}
-                            for db_column, yf_field in stats.items():
-
-                                if use_fast_info:
-                                    value = info.__getattribute__(yf_field)
-                                else:
-                                    value = info.get(yf_field)
-
-                                if value is not None:
-                                    if isinstance(value,
-                                                  (float, int)):
-                                        update_values[db_column] = round(float(value), 2)
-                                    else:
-                                        update_values[db_column] = value
+                        if value is not None:
+                            formatted_value = IndicatorCalculationUtils.format_orchestrator(data=value)
+                            statement = (
+                                update(database_model)
+                                .where(database_model.symbol == symbol)
+                                .values(**formatted_value)
+                            )
+                            await database_session.execute(statement)
 
 
+                    except Exception as inner_e:
+                        logger.warning(f"Error fetch info for {symbol}: {inner_e}")
+                remaining = remaining - chunk_size
+                await database_session.commit()
+                logger.info(f"Chunk jobname: {jobtype} has been completed remaining assets: {remaining} ")
+                await asyncio.sleep(sleep_time)
 
-
-                            if update_values:
-                                statement = (
-                                    update(database_model)
-                                    .where(database_model.symbol == symbol)
-                                    .values(**update_values)
-                                )
-                                session.exec(statement)
-
-                        except Exception as inner_e:
-                            logger.warning(f"Error fetching info for {symbol}: {inner_e}")
-
-
-                    session.commit()
-                    logger.info(f"Chunk completed and committed.")
-                    time.sleep(sleep_time)
 
         except Exception as e:
             logger.error(f"Global error in _update_long_time_ticker_metrics: {e}")
             raise e
 
     @staticmethod
-    def recalculate_all_pe_ratios(database_model : Type[StatBase] = StockStats):
-        try:
-            with (Session(engine) as session):
+    async def recalculate_all_pe_ratios(
+            database_session: AsyncSession,
+            database_model: Type[StatBase] = StockStats,
 
-                statement = update(database_model).where(database_model.eps != None , database_model.eps != 0).values(peRatio=func.round(func.cast(database_model.previous_close , Numeric) / func.cast(database_model.eps , Numeric) , 2))
+    ):
+        statement = (update(database_model).
+                     where(database_model.eps.is_not(None), database_model.eps != 0).
+                     values(trailingPE=func.round(func.cast(database_model.previousClose, Numeric) / func.cast(database_model.eps, Numeric), 2)))
 
-                results = session.exec(statement)
+        results = await database_session.execute(statement)
 
-                session.commit()
-                logger.info("All PE Ratios recalculated successfully via Raw SQL.")
-        except Exception as e:
-            logger.error(f"Error in calculate_pe_ratios: {e}")
+        await database_session.commit()
+        logger.info("All PE Ratios recalculated successfully via Raw SQL.")
 
     @staticmethod
-    def daily_job(
+    async def daily_job(
             database_model: Type[StatBase],
+            database_session: AsyncSession,
             chunk_size: int,
             sleep_time: int,
             stats: dict,
             jobtype: str,
             use_fast_info: bool = True
     ):
+
         """
         Uses yfinance_info or yfinance.get_fast_info to updates stock redis_stats
 
         :param use_fast_info: determines the function will use ticker.info or ticker.get_fast_info (if true is uses get_fast_info)
         :param database_model: table model of database
+        :param database_session: current database session
         :param chunk_size: batch size when download stock data from yfinance
         :param sleep_time: sleep time between each batch
         :param redis_stats: redis_stats that will update example: {"stat_name_at_database_model":"stat_name_at_yfinance_info"}
@@ -410,27 +421,30 @@ class StockRepository():
         :return:
         """
         logger.info(f"----------------- {jobtype} has been started .. -----------------")
-        logger.info(f"{jobtype } with redis_stats: {locals()}")
-        symbols = StockRepository._fetch_symbols_from_postresql(database_model=database_model)
+        logger.info(f"{jobtype} with stats: sleep_time {sleep_time} , chunk_size {chunk_size}")
+        symbols = await StockRepository._fetch_symbols_from_database(database_model=database_model, database_session=database_session)
 
-        StockRepository._update_long_time_ticker_metrics(
-            chunk_size=chunk_size ,
-            sleep_time=sleep_time ,
-            database_model=database_model ,
-            stats=stats ,
+        await StockRepository._update_long_time_ticker_metrics(
+            chunk_size=chunk_size,
+            sleep_time=sleep_time,
             symbols=symbols,
+            database_model=database_model,
+            database_session=database_session,
+            stats=stats,
             jobtype=jobtype,
             use_fast_info=use_fast_info
         )
 
-        # StockRepository._recalculate_all_pe_ratios()
         logger.info(f"----------------- {jobtype} has been done successfully -----------------")
 
-
-
-
     @staticmethod
-    async def get_single_stock_indicators(ticker: str , period: str ,  indicator_settings: GetSingleStockIndicatorModel):
+    async def get_single_stock_indicators(
+            ticker: str,
+            period: str,
+            redis_manager: RedisClient,
+            indicator_settings: GetSingleStockIndicatorModel
+
+    ):
         "Calculates multiple indicator for single stock"
         try:
             ticker = ticker.upper()
@@ -438,22 +452,19 @@ class StockRepository():
             settings_dict = indicator_settings.model_dump()
 
             cache_data = {**settings_dict, "period": period}
-            settings_json = json.dumps(cache_data , sort_keys=True)
+            settings_json = json.dumps(cache_data, sort_keys=True)
             settings_hash = hashlib.md5(settings_json.encode()).hexdigest()
-
 
             cache_key = f"stock:{ticker}:settings:{settings_hash}"
 
-            cached_val = redis_manager.getRedis(name=cache_key)
+            cached_val = await redis_manager.getRedis(name=cache_key)
 
             if cached_val:
                 logger.info("Cache hit on multiple indicator calculation")
                 return cached_val
-            logger.info("Cache miss on multiple indicator calculation calculating indicators ... ")
+            logger.info("Cache miss on multiple indicator calculation. Calculating indicators ... ")
 
-
-
-            df = await StockRepository._fetch_raw_stock_df(ticker=ticker, period=period)
+            df = await StockRepository._fetch_raw_stock_history_df(ticker=ticker, period=period)
 
             calculated_indicators = await IndicatorService.compute_all_logic(df=df, **settings_dict)
 
@@ -467,37 +478,48 @@ class StockRepository():
             logger.error(f"An error occurded: {e}")
             raise e
 
-
     @staticmethod
-    def seed_database(arguments: dict,database_model: Type[StatBase]):
+    async def seed_database(
+            arguments: dict,
+            database_session: AsyncSession,
+            database_model: Type[StatBase],
+
+    ):
         """
         Initialize Statbase with name and ticker code
-        :param arguments: dictionary type arguments e.g: {ticker_symbol:ticker_name}
+        :param database_model: database table model
+        :param database_session: current database session
+        :param arguments: must be a dict ,  symbol as key and name as value e.g: {ticker_symbol:ticker_name}
         """
-        try:
-            with Session(engine) as session:
-                statement = select(func.count()).select_from(database_model)
-                count = session.exec(statement).one()
+        logger.info(f"Synchronizing database {database_model} with JSON source...")
 
-                if count > 0:
-                    logger.info(f"Database already initialized skipping {database_model}")
+        statement = select(database_model.symbol)
+        execution = await database_session.execute(statement)
 
-                logger.info(f"Initializing database {database_model}")
+        db_symbols = set(execution.scalars().all())
 
-                templist = []
-                for symbol , name in arguments.items():
-                    templist.append(database_model(symbol=symbol , name=name))
+        json_symbols = set(arguments.keys())
 
-                session.add_all(templist)
-                session.commit()
-                logger.info(f"Successfully seeded {len(templist)} records to {database_model}.")
+        to_add_symbols = json_symbols - db_symbols
+        templist = []
+        for sym in to_add_symbols:
+            templist.append(database_model(symbol=sym, name=arguments[sym]))
 
+        if templist:
+            database_session.add_all(templist)
+            logger.info(f"Adding {len(templist)} new symbols.")
 
-        except Exception as e:
-            logger.error(f"An error occurded while initializing database {e}")
+        to_delete_symbols = db_symbols - json_symbols
+        if to_delete_symbols:
+            delete_statement = delete(database_model).where(col(database_model.symbol).in_(to_delete_symbols))
+            await database_session.execute(delete_statement)
+            logger.info(f"Deleting {len(to_delete_symbols)} obsolete symbols.")
+
+        await database_session.commit()
+        logger.info(f"Sync completed for {database_model}.")
 
     @staticmethod
-    def load_initial_stocks(file_path: str) -> dict:
+    async def load_initial_stocks(file_path: str) -> dict:
         """
         Fetch initial symbol and name from given json path
 
@@ -508,28 +530,26 @@ class StockRepository():
             return json.load(f)
 
     @staticmethod
-    def initialize_db(file_path: str , database_model: Type[StatBase]):
+    async def initialize_db(
+            file_path: str,
+            database_model: Type[StatBase],
+            database_session: AsyncSession
+
+    ):
         """
         orchestrator function for load_initial_stocks and seed_database initializes database model
+        :param database_session: current database session
         :param file_path: path of relevant json file
         :param database_model: relevant table model
 
         """
-        results = StockRepository.load_initial_stocks(file_path=file_path)
+        results = await StockRepository.load_initial_stocks(file_path=file_path)
         if not results:
             logger.warning(f"Seed data has not been loaded either file_name is missing or empty")
             raise SeedFileNotFoundException
 
-        StockRepository.seed_database(arguments=results, database_model=database_model)
-
-
-
-
-
-
-
-
-
-
-
-
+        await StockRepository.seed_database(
+            arguments=results,
+            database_model=database_model,
+            database_session=database_session
+        )

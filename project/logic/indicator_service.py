@@ -7,6 +7,13 @@ logger = logging.getLogger(__name__)
 class IndicatorService:
     @staticmethod
     async def compute_rsi_logic(df: pl.DataFrame, period: int = 14):
+        if len(df) < period:
+            return {
+            "rsi_value": "NaN",
+            "closing_price": "Nan",
+            "ticker": "Nan",
+            "status": "Nan",
+        }
         close_col = pl.col("Close")
         delta = close_col.diff()
         gain = pl.when(delta > 0).then(delta).otherwise(0.0)
@@ -89,9 +96,8 @@ class IndicatorService:
 
 
 
-
+    @staticmethod
     async def compute_all_logic(
-            self,
             df: pl.DataFrame,
             rsi_period: int = 14,  # period for rsi
             bb_period: int = 20,  # period for bollinger
@@ -155,11 +161,11 @@ class IndicatorService:
         try:
             tasks = [
 
-                self.compute_rsi_logic(df, period=rsi_period),
-                self.compute_ma_logic(df, short_window=ma_short, long_window=ma_long),
-                self.compute_bollinger_logic(df, period=bb_period, std_dev=bb_std_dev),
-                self.compute_macd_logic(df, fast=macd_fast, slow=macd_slow, signal=macd_signal),
-                self.compute_rvol_logic(df)
+                IndicatorService.compute_rsi_logic(df, period=rsi_period),
+                IndicatorService.compute_ma_logic(df, short_window=ma_short, long_window=ma_long),
+                IndicatorService.compute_bollinger_logic(df, period=bb_period, std_dev=bb_std_dev),
+                IndicatorService.compute_macd_logic(df, fast=macd_fast, slow=macd_slow, signal=macd_signal),
+                IndicatorService.compute_rvol_logic(df)
             ]
 
             results = await asyncio.gather(*tasks)

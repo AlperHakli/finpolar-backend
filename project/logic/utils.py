@@ -1,13 +1,19 @@
 import random
 
 import polars as pl
+from pandas import DataFrame
 from datetime import datetime
 import logging
 from functools import wraps
-from project.logic.constants import ALL_TOOLS , ANALYSIS_TOOLS
+
+import yfinance
+
+from project.logic.constants import ALL_TOOLS, ANALYSIS_TOOLS
 from project.logic.exceptions import DataTypeException
+from settings import settings
 
 logger = logging.getLogger(__name__)
+
 
 class ToolWrapper:
     @staticmethod
@@ -33,6 +39,7 @@ class ToolWrapper:
             return await func(*args, **kwargs)
 
         return wrapper
+
     @staticmethod
     def register_tool(category: str = "general"):
         """
@@ -52,6 +59,7 @@ class ToolWrapper:
 
         return decorator
 
+
 class IndicatorCalculationUtils:
     @staticmethod
     def interval_calculator(period: str):
@@ -64,12 +72,15 @@ class IndicatorCalculationUtils:
             return "15m"
         elif (period == "1mo"):
             return "1d"
+        elif (period == "2mo"):
+            return "1d"
         elif (period == "6mo"):
             return "1d"
         elif (period == "1y"):
             return "1d"
         else:
             return "1wk"
+
     @staticmethod
     def format_market_cap(n: int):
         """
@@ -81,14 +92,15 @@ class IndicatorCalculationUtils:
                 return f"{n:.2f}{unit}"
             n /= 1000.0
         return f"{n:.2f}T"
-    @staticmethod
-    def format_symbol(symbol: str):
-        """
-        Format symbol
-        """
-        if symbol.endswith(".IS"):
-            return symbol[:-3]
-        return symbol
+
+    # @staticmethod
+    # def format_symbol(symbol: str):
+    #     """
+    #     Format symbol
+    #     """
+    #     if symbol.endswith(".IS"):
+    #         return symbol[:-3]
+    #     return symbol
     @staticmethod
     def change_percent_calculator(current_close: float, prev_close: float) -> float:
         """
@@ -98,8 +110,8 @@ class IndicatorCalculationUtils:
         return round(change_percent, 2)
 
     @staticmethod
-    def work_time_controller()\
-            ->bool:
+    def work_time_controller() \
+            -> bool:
         """
         Controls if stock market is open or not
         True = Open , False Closed
@@ -117,23 +129,66 @@ class IndicatorCalculationUtils:
             return False
 
         return True
+
     @staticmethod
-    def add_random_seconds_to_sleep_time_between_chunks(sleep_time:float):
+    def add_random_seconds_to_sleep_time_between_chunks(sleep_time: float) -> float:
         """
         as it says , it adds random seconds to given variable
         """
-        randomvariable = random.uniform(0.3 , 1.2)
+        randomvariable = random.uniform(0.3, 1.2)
         return sleep_time + randomvariable
 
+    @staticmethod
+    def format_summary_length(summary_length: int, summary: str):
+        """
+        Format summary length
+        :return: formatted summary
+        """
+        return summary[:summary_length] + "..." if len(summary) > summary_length else summary
+
+    # -- Formatter Orchestrator --
+
+    FORMATTERS = {
+        # "marketCap": lambda val: IndicatorCalculationUtils.format_market_cap(val),
+        "summary": lambda val: IndicatorCalculationUtils.format_summary_length(
+            summary=val,
+            summary_length=settings.MAX_SUMMARY_LENGTH
+        ),
+        # "symbol": lambda val: IndicatorCalculationUtils.format_symbol(val),
+        "previousClose": lambda val: round(float(val), 2) if val else 0.0,
+
+    }
+
+    @staticmethod
+    def format_orchestrator(data: dict) -> dict:
+        """
+        Applies format rule for every key that in data
+        """
+        formatted_data = {}
+
+        for key, value in data.items():
+            #if a formatter exists for given stat then use it otherwise use raw data
+            formatter = IndicatorCalculationUtils.FORMATTERS.get(key)
+            if formatter and value is not None:
+                formatted_data[key] = formatter(value)
+            else:
+                formatted_data[key] = value
+
+        return formatted_data
+    #TODO refactor this formatter
 
 
+class HelperFunctions():
+    @staticmethod
+    def fetch_1d_history(inner_chunk: list[str]) -> DataFrame:
+        inner_data = yfinance.download(inner_chunk, period="1d", group_by="ticker", progress=False)
+        return inner_data
 
-
-
-
-
-
-
-
-
-
+    @staticmethod
+    def fetch_history(symbol: str, period: str, interval: str) -> DataFrame:
+        """
+        fetch history of given symbol with respect to period and interval
+        """
+        stock = yfinance.Ticker(ticker=symbol)
+        df_pd = stock.history(period=period, interval=interval)
+        return df_pd

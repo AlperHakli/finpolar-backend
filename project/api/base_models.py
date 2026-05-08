@@ -32,12 +32,12 @@ class StatBase(SQLModel):
     name:str = Field(default="none")
 
     # updates daily
-    previous_close: float = Field(default=0.0 , description="previous close value")
+    previousClose: float = Field(default=0.0, description="previous close value")
 
     #updates one time in 3 days
-    marketCap: float = Field(default=0.0)
-    year_high:float = Field(default=0.0 , description="highest price in current year")
-    year_low: float = Field(default=0.0 , description="lowest price in current year")
+    marketCap: float = Field(default=0.0 , description="market capacity of asset")
+    yearHigh:float = Field(default=0.0, description="highest price in current year")
+    yearLow: float = Field(default=0.0, description="lowest price in current year")
 
 
 #stock stats model
