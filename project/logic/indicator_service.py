@@ -1,9 +1,19 @@
 import polars as pl
+import asyncio
+import logging
 
+logger = logging.getLogger(__name__)
 
 class IndicatorService:
     @staticmethod
     async def compute_rsi_logic(df: pl.DataFrame, period: int = 14):
+        if len(df) < period:
+            return {
+            "rsi_value": "NaN",
+            "closing_price": "Nan",
+            "ticker": "Nan",
+            "status": "Nan",
+        }
         close_col = pl.col("Close")
         delta = close_col.diff()
         gain = pl.when(delta > 0).then(delta).otherwise(0.0)
@@ -84,3 +94,90 @@ class IndicatorService:
             "rvol": (current_volume / avg_volume) if avg_volume != 0 else 0
         }
 
+
+
+    @staticmethod
+    async def compute_all_logic(
+            df: pl.DataFrame,
+            rsi_period: int = 14,  # period for rsi
+            bb_period: int = 20,  # period for bollinger
+            bb_std_dev: int = 2,  # Bollinger standart deviation
+            ma_short: int = 20,  # MA short
+            ma_long: int = 50,  # MA long
+            macd_fast: int = 12,  # MACD fast
+            macd_slow: int = 26,  # MACD slow
+            macd_signal: int = 9,  # MACD signal
+    ) -> dict:
+        """
+        Consolidates multiple technical indicators into a single analytical snapshot
+        for a given financial security.
+
+        This method aggregates momentum, trend, volatility, and volume-based metrics
+        to provide a holistic view of the asset's current market state.
+
+        Args:
+            df (pl.DataFrame): Input Polars DataFrame containing OHLCV data.
+                Must include 'Close' and 'Volume' columns.
+            short_window (int): The period for the short-term Simple Moving Average (SMA)
+                and Exponential Moving Average (EMA). Used for immediate trend detection.
+            long_window (int): The period for the long-term SMA. Essential for identifying
+                macro trend direction and potential 'Golden Cross' or 'Death Cross' events.
+            std_dev (int): Number of standard deviations for Bollinger Bands. Defines the
+                width of the volatility envelope.
+            fast (int): The 'fast' period for MACD EMA calculation (typically 12).
+            slow (int): The 'slow' period for MACD EMA calculation (typically 26).
+            signal (int): The period for the MACD Signal Line (typically 9).
+
+        Returns:
+            dict: A comprehensive dictionary containing:
+
+                --- MOMENTUM (RSI) ---
+                - rsi_value: A momentum oscillator (0-100) measuring the speed and change
+                  of price movements.
+                - status: Qualitative signal based on RSI (Overbought >= 70, Oversold <= 30).
+
+                --- TREND (MA) ---
+                - sma_short / sma_long: Baseline trend indicators. Price above SMA
+                  suggests an uptrend; price below suggests a downtrend.
+                - ema_short: Similar to SMA but prioritizes recent price action,
+                  reacting faster to market shifts.
+
+                --- VOLATILITY (Bollinger Bands) ---
+                - upper / lower: Volatility boundaries. Prices hitting the upper band
+                  may be overextended; hitting the lower band may indicate a value zone.
+                - middle: The 20-period SMA acting as a mean-reversion target.
+
+                --- MOMENTUM TREND (MACD) ---
+                - m_line: The difference between Fast and Slow EMAs.
+                - s_line: The 9-day EMA of the MACD Line. Crossovers between M and S lines
+                  are primary buy/sell signals.
+
+                --- INTENSITY (RVOL) ---
+                - current_volume: Real-time trading activity.
+                - rvol: Ratio of current volume to average volume. RVOL > 2.0 often
+                  indicates institutional interest or a potential breakout.
+                - price_change: The percentage change between the last two closing prices.
+        """
+        try:
+            tasks = [
+
+                IndicatorService.compute_rsi_logic(df, period=rsi_period),
+                IndicatorService.compute_ma_logic(df, short_window=ma_short, long_window=ma_long),
+                IndicatorService.compute_bollinger_logic(df, period=bb_period, std_dev=bb_std_dev),
+                IndicatorService.compute_macd_logic(df, fast=macd_fast, slow=macd_slow, signal=macd_signal),
+                IndicatorService.compute_rvol_logic(df)
+            ]
+
+            results = await asyncio.gather(*tasks)
+
+            return {
+                "rsi": results[0],
+                "moving_averages": results[1],
+                "bollinger_bands": results[2],
+                "macd": results[3],
+                "volume_analysis": results[4]
+            }
+
+        except Exception as e:
+            logger.error(f"Computation error: {e}")
+            return None

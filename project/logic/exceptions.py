@@ -16,6 +16,14 @@ class StockNotFoundException(FinpolarException):
         super().__init__(message=message)
     pass
 
+class SeedFileNotFoundException(FinpolarException):
+    "When seeding file does not found fast api throw this"
+
+    def __init__(self , file_path: str):
+        self.file_path = file_path
+        super().__init__(message=f"CRITICAL ERROR seed data file not found at {file_path}")
+
+
 class YfinanceApiException(FinpolarException):
     "Throws when an error occur from yfinance api"
     def __init__(self , technical_detail: str):
