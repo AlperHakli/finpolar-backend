@@ -26,7 +26,7 @@ class IndicatorService:
         latest_row = result_df.tail(1).to_dicts()[0]
         val = latest_row["RSI"]
         status = "Overbought (Potential Reversal/Bearish)" if val >= 70 else \
-            "Oversold (Potential Bounce/Bullish)" if val <= 30 else "Neutral"
+            "Oversold (Potential Bounce/Bullish)" if val <= 30 else "NORMAL"
 
         return {
             "rsi_value": latest_row["RSI"],
@@ -41,13 +41,27 @@ class IndicatorService:
             pl.col("Close").rolling_mean(window_size=long_window).alias(f"SMA_{long_window}"),
             pl.col("Close").ewm_mean(span=short_window, adjust=False).alias(f"EMA_{short_window}")
         ])
+
         latest = df_ma.tail(1).row(0, named=True)
+        s_ma = latest[f"SMA_{short_window}"]
+        l_ma = latest[f"SMA_{long_window}"]
+        price = latest["Close"]
+
+        if s_ma is None or l_ma is None:
+            status = "NEUTRAL"
+        elif s_ma > l_ma and price > s_ma:
+            status = "BULLISH"
+        elif s_ma < l_ma and price < s_ma:
+            status = "BEARISH"
+        else:
+            status = "CONSOLIDATION"
         return {
-            "curr_price": latest["Close"],
-            "sma_short": latest[f"SMA_{short_window}"],
-            "sma_long": latest[f"SMA_{long_window}"],
+            "curr_price": price,
+            "sma_short": s_ma,
+            "sma_long": l_ma,
             "short_window": short_window,
-            "long_window": long_window
+            "long_window": long_window,
+            "status":status,
         }
     @staticmethod
     async def compute_bollinger_logic(df: pl.DataFrame, period: int = 20, std_dev: int = 2):
@@ -59,11 +73,23 @@ class IndicatorService:
             (pl.col("Middle_Band") - (std_dev * pl.col("Std_Dev"))).alias("Lower_Band")
         ])
         latest = df_bb.tail(1).row(0, named=True)
+        upper = latest["Upper_Band"]
+        lower = latest["Lower_Band"]
+        price = latest["Close"]
+        if upper is None or lower is None:
+            status = "NORMAL"
+        elif price >= upper:
+            status = "UPPER_BOUND"
+        elif price <= lower:
+            status = "LOWER_BOUND"
+        else:
+            status = "NORMAL"
         return {
-            "price": latest["Close"],
-            "upper": latest["Upper_Band"],
-            "lower": latest["Lower_Band"],
-            "middle": latest["Middle_Band"]
+            "price": price,
+            "upper": upper,
+            "lower": lower,
+            "middle": latest["Middle_Band"],
+            "status": status
         }
     @staticmethod
     async def compute_macd_logic(df: pl.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9):
@@ -77,9 +103,22 @@ class IndicatorService:
             pl.col("MACD_line").ewm_mean(span=signal, adjust=False).alias("Signal_line")
         )
         latest = df_macd.tail(1).row(0, named=True)
+
+        m_line = latest["MACD_line"]
+        s_line = latest["Signal_line"]
+
+        # Durum Belirleme
+        if m_line is None or s_line is None:
+            status = "NEUTRAL"
+        elif m_line > s_line:
+            status = "BULLISH_CROSS"
+        else:
+            status = "BEARISH_CROSS"
+
         return {
-            "m_line": latest["MACD_line"],
-            "s_line": latest["Signal_line"]
+            "m_line": m_line,
+            "s_line": s_line,
+            "status": status
         }
     @staticmethod
     async def compute_rvol_logic(df: pl.DataFrame):
@@ -87,11 +126,21 @@ class IndicatorService:
         current_volume = df["Volume"].tail(1)[0]
         last_two_days = df["Close"].tail(2).to_list()
         price_change = ((last_two_days[1] - last_two_days[0]) / last_two_days[0]) * 100
+        rvol = (current_volume / avg_volume) if avg_volume != 0 else 0
+
+        if rvol >= 2.0 and price_change > 0:
+            status = "VOLUME_BREAKOUT"
+        elif rvol >= 2.0 and price_change < 0:
+            status = "VOLUME_SELLOFF"
+        else:
+            status = "NORMAL"
+
         return {
             "avg_volume": avg_volume,
             "current_volume": current_volume,
             "price_change": price_change,
-            "rvol": (current_volume / avg_volume) if avg_volume != 0 else 0
+            "rvol": rvol,
+            "status": status
         }
 
 

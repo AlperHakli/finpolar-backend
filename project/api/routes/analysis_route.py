@@ -6,6 +6,7 @@ from project.api.base_models import AnalysisModel
 from project.api.repository.analysis_repo import AnalysisRepo
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from project.api.dependencies import RedisDbDep
 import json
 router = APIRouter(prefix="/analysis" ,tags=["AI chat"])
 
@@ -13,7 +14,7 @@ router = APIRouter(prefix="/analysis" ,tags=["AI chat"])
 limiter = Limiter(key_func=get_remote_address)
 
 @router.post("/chat")
-@limiter.limit("5/day")
+@limiter.limit("50/day")
 async def chat_llm(request: Request, analysis_data: AnalysisModel):
     async def sse_wrapper():
         async for token in AnalysisRepo.get_ai_stream(analysis_data.message, session_id=analysis_data.session_id):
@@ -30,6 +31,15 @@ async def chat_llm(request: Request, analysis_data: AnalysisModel):
             "X-Accel-Buffering": "no",
         }
     )
+
+@router.get("/ai-asset-summary")
+async def get_ai_summary(
+        ticker: str,
+        session_id: str,
+        redis_manager: RedisDbDep
+
+):
+    return await AnalysisRepo.get_summary_score(symbol=ticker , session_id= session_id ,  redis_manager=redis_manager)
 
 
 @router.get("/test-stream")
