@@ -12,6 +12,8 @@ from project.logic.utils import IndicatorCalculationUtils, HelperFunctions
 from project.api.base_models import StockStats, GetSingleStockIndicatorModel, StatBase
 from project.logic.indicator_service import IndicatorService
 from project.api.redis_client import RedisClient
+
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -102,7 +104,7 @@ class StockRepository():
             redis_stats: list[str],
     ):
         """
-        Merges both single stock postresql data and redis data
+        Fetch and Merge single stock postresql data and redis data
         :param symbol: symbol of asset
         :param redis_stats: redis will use this list's elements as keys
         :param database_model: table model of persistent database
@@ -110,6 +112,7 @@ class StockRepository():
 
         redisresult = await StockRepository.get_single_asset_realtime_data(symbol=symbol, stats=redis_stats, redis_manager=redis_manager)
         dbresult = await StockRepository.get_single_asset(symbol=symbol, database_session=database_session, database_model=database_model)
+
 
         currentPrice = redisresult.get("last_price", 0.0)
         previousClose = dbresult.get("previousClose", 0.0)
@@ -121,6 +124,8 @@ class StockRepository():
             changePercent = IndicatorCalculationUtils.change_percent_calculator(currentPrice, previousClose)
 
         changeDigit = currentPrice - previousClose
+        if changeDigit == 0:
+            await redis_manager.setRedisNoDict(f"stock:{symbol}:last_price", currentPrice, exp=7200)
 
         newdict = {"changeDigit": changeDigit, "changePercent": changePercent}
 
@@ -197,6 +202,9 @@ class StockRepository():
     ):
         """
         Writes most increased and decreased 10 stocks and writes top 10 stocks that have the most volume to redis
+        Uses both redis and postresql
+        uses current_price from redis
+        uses previousClose , name and symbol from postresql
 
         :param database_model: database table model
         :param database_session: current database session
@@ -206,8 +214,8 @@ class StockRepository():
         :return:
         """
         try:
-            if not IndicatorCalculationUtils.work_time_controller():
-                return
+            # if not IndicatorCalculationUtils.work_time_controller():
+            #     return
             sleep_time_rnd_added = IndicatorCalculationUtils.add_random_seconds_to_sleep_time_between_chunks(sleep_time=sleep_time)
 
             statement = select(database_model)
@@ -256,7 +264,7 @@ class StockRepository():
 
                         stat_list.append(
                             {
-                                "symbol": ticker.replace(".IS", ""),
+                                "symbol": ticker,
                                 "name": stock_name,
                                 "price": round(float(current_close), 2),
                                 "trade_value": float(trade_value),
@@ -317,7 +325,7 @@ class StockRepository():
             database_session: AsyncSession,
             stats: dict,
             jobtype: str,
-            use_fast_info=True
+            use_fast_info: bool,
     ):
 
         """
@@ -339,12 +347,12 @@ class StockRepository():
             if inner_use_fast_info:
                 info = inner_ticker.fast_info
                 for db_column, yf_field in inner_stats.items():
-                    value.update({db_column: info.__getattribute__(yf_field)})
+                    value[db_column] = info.__getattribute__(yf_field)
 
             else:
-                info = inner_ticker.info
+                info = dict(inner_ticker.info)
                 for db_column, yf_field in inner_stats.items():
-                    value.update({db_column: info.get(yf_field)})
+                    value[db_column] = info.get(yf_field)
 
             return value
 
@@ -439,43 +447,100 @@ class StockRepository():
 
     @staticmethod
     async def get_single_stock_indicators(
-            ticker: str,
-            period: str,
             redis_manager: RedisClient,
             indicator_settings: GetSingleStockIndicatorModel
-
-    ):
-        "Calculates multiple indicator for single stock"
+    ) -> dict:
+        """
+        Calculates multiple indicators for a single stock using an atomic caching strategy.
+        Only computes indicators that are missing from Redis.
+        """
         try:
-            ticker = ticker.upper()
+            ticker = indicator_settings.ticker.upper()
+            period = indicator_settings.period
+            s = indicator_settings.model_dump()
 
-            settings_dict = indicator_settings.model_dump()
+            # creating unique indicator keys
+            keys = {
+                "rsi": f"stock_indicator:RSI:{ticker}:{s['rsi_period']}:{period}",
+                "macd": f"stock_indicator:MACD:{ticker}:{s['macd_fast']}_{s['macd_slow']}_{s['macd_signal']}:{period}",
+                "bb": f"stock_indicator:BB:{ticker}:{s['bb_period']}_{s['bb_std_dev']}:{period}",
+                "ma": f"stock_indicator:MA:{ticker}:{s['ma_short']}_{s['ma_long']}:{period}",
+                "rvol": f"stock_indicator:RVOL:{ticker}:{period}"
+            }
+            #fetch caches
+            cached_data = {
+                "rsi": await redis_manager.getRedis(keys["rsi"]),
+                "macd": await redis_manager.getRedis(keys["macd"]),
+                "bb": await redis_manager.getRedis(keys["bb"]),
+                "ma": await redis_manager.getRedis(keys["ma"]),
+                "rvol": await redis_manager.getRedis(keys["rvol"])
+            }
 
-            cache_data = {**settings_dict, "period": period}
-            settings_json = json.dumps(cache_data, sort_keys=True)
-            settings_hash = hashlib.md5(settings_json.encode()).hexdigest()
 
-            cache_key = f"stock:{ticker}:settings:{settings_hash}"
+            missing_indicators = [name for name, val in cached_data.items() if not val]
 
-            cached_val = await redis_manager.getRedis(name=cache_key)
 
-            if cached_val:
-                logger.info("Cache hit on multiple indicator calculation")
-                return cached_val
-            logger.info("Cache miss on multiple indicator calculation. Calculating indicators ... ")
+            if not missing_indicators:
+                logger.info(f"Cache HIT for all indicators of {ticker} ({period})")
+                return {
+                    "rsi": cached_data["rsi"],
+                    "moving_averages": cached_data["ma"],
+                    "bollinger_bands": cached_data["bb"],
+                    "macd": cached_data["macd"],
+                    "volume_analysis": cached_data["rvol"]
+                }
 
+
+            logger.info(f"Cache MISS on indicators: {missing_indicators}. Fetching data from DB...")
             df = await StockRepository._fetch_raw_stock_history_df(ticker=ticker, period=period)
 
-            calculated_indicators = await IndicatorService.compute_all_logic(df=df, **settings_dict)
+            if df is None or len(df) == 0:
+                logger.warning(f"No price data found for {ticker}")
+                return {}
 
-            logger.info("Multiple indicator calculation has been completed")
 
-            await redis_manager.setRedis(name=cache_key, value=calculated_indicators)
+            tasks = {}
+            if "rsi" in missing_indicators:
+                tasks["rsi"] = IndicatorService.compute_rsi_logic(df, period=s["rsi_period"])
+            if "ma" in missing_indicators:
+                tasks["ma"] = IndicatorService.compute_ma_logic(
+                    df, short_window=s["ma_short"], long_window=s["ma_long"]
+                    )
+            if "bb" in missing_indicators:
+                tasks["bb"] = IndicatorService.compute_bollinger_logic(
+                    df, period=s["bb_period"], std_dev=s["bb_std_dev"]
+                    )
+            if "macd" in missing_indicators:
+                tasks["macd"] = IndicatorService.compute_macd_logic(
+                    df, fast=s["macd_fast"], slow=s["macd_slow"], signal=s["macd_signal"]
+                    )
+            if "rvol" in missing_indicators:
+                tasks["rvol"] = IndicatorService.compute_rvol_logic(df)
 
-            return calculated_indicators
+
+            calculated_results = {}
+            if tasks:
+                task_names = list(tasks.keys())
+                executed_tasks = await asyncio.gather(*tasks.values())
+                calculated_results = dict(zip(task_names, executed_tasks))
+
+
+            for name, result in calculated_results.items():
+                if result:
+                    await redis_manager.setRedis(name=keys[name], value=result, exp=600)
+                    cached_data[name] = result
+
+
+            return {
+                "rsi": cached_data["rsi"],
+                "moving_averages": cached_data["ma"],
+                "bollinger_bands": cached_data["bb"],
+                "macd": cached_data["macd"],
+                "volume_analysis": cached_data["rvol"]
+            }
 
         except Exception as e:
-            logger.error(f"An error occurded: {e}")
+            logger.error(f"An error occurred in get_single_stock_indicators: {e}")
             raise e
 
     @staticmethod

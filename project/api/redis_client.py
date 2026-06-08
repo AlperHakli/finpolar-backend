@@ -1,5 +1,7 @@
 import json
 import logging
+from typing import Any
+
 import redis.asyncio as redis
 from settings import  settings
 
@@ -27,10 +29,17 @@ class RedisClient():
 
     async def setRedis(self, name:str, value: dict, exp:int = 300):
         """
-        Writes data to redis
+        Writes dictionary data to redis
         """
         json_value = json.dumps(value)
         await self.redis_client.set(name= name , value=json_value , ex = exp)
+
+    async def setRedisNoDict(self, name:str, value: Any, exp:int = 300):
+        """
+        Writes data to redis
+        """
+
+        await self.redis_client.set(name= name , value=value , ex = exp)
 
     async def setRedisNoExp(self, name:str, value: dict):
         """
@@ -45,7 +54,11 @@ class RedisClient():
         await self.connect()
 
         value = await self.redis_client.get(name)
-        return value
+        if value:
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return value
 
 redis_manager = RedisClient(redis_host= settings.REDIS_HOST , redis_port= settings.REDIS_PORT)
 

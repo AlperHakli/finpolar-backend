@@ -9,13 +9,14 @@ services:
       - POSTGRES_DB=finpolar
     ports:
       - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
   redis:
     image: redis:alpine
     container_name: finpolar-redis-cache
     restart: always
     ports:
       - "6379:6379"
-
 
 
   finpolar-backend:
@@ -27,4 +28,8 @@ services:
       - "8001:${PORT}"
     env_file:
       - .env
+    volumes:
+      - .:/app
+volumes:
+  postgres_data:
 

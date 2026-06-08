@@ -7,9 +7,15 @@ load_dotenv()
 
 class Settings():
 
-    DATABASE_URL = os.getenv("POSTRESQL_DATABASE_URL", "LOCALHOST_POSTRESQL_DATABASE_URL")
+
+
+
+    DATABASE_URL = os.getenv("LOCALHOST_POSTRESQL_DATABASE_URL")
+
+
     REDIS_PORT = os.getenv("REDIS_PORT")
-    REDIS_HOST = os.getenv("REDIS_HOST", "LOCAL_REDIS_HOST")
+    REDIS_HOST = os.getenv("LOCAL_REDIS_HOST")
+    # "REDIS_HOST",
 
 
 
@@ -65,13 +71,61 @@ class Settings():
 
     }
 
-    LONGTIME_UPDATE_STATS = {
+    # LONGTIME_UPDATE_STATS = {
+    #
+    #     "yearHigh": "year_high",
+    #     "yearLow": "year_low",
+    #     "trailingPE":"trailingPE",
+    #     "forwardPE":"forwardPE",
+    #     "priceToBook":"priceToBook",
+    #     "enterpriseToEbitda":"enterpriseToEbitda",
+    #     "currentRatio":"currentRatio",
+    #     "debtToEquity":"debtToEquity",
+    #     "returnOnEquity":"returnOnEquity",
+    #     "returnOnAssets":"returnOnAssets",
+    # }
+    # DAILY_UPDATE_STATS = {
+    #     "previousClose": "previous_close",
+    #     "dayHigh":"day_high",
+    #     "dayLow":"day_low",
+    #     "volume":"last_volume",
+    #     "open": "open",
+    #     "marketCap": "market_cap",
+    #
+    #     "avgVolume10Days":"ten_day_average_volume",
+    #
+    #     "avgVolume3Months":"three_month_average_volume",
+    #
+    #
+    # }
+
+    DAILY_UPDATE_STATS = {
+
+        "previousClose": "previous_close",
+        "dayHigh": "day_high",
+        "dayLow": "day_low",
+        "volume": "last_volume",
+        "open": "open",
         "marketCap": "market_cap",
         "yearHigh": "year_high",
         "yearLow": "year_low",
+
+
+        "avgVolume10Days": "ten_day_average_volume",
+        "avgVolume3Months": "three_month_average_volume",
+        "avg50Days": "fifty_day_average",
+        "avg200Days": "two_hundred_day_average",
+        "lastVolume":"last_volume"
     }
-    DAILY_UPDATE_STATS = {
-        "previousClose": "previous_close",
+
+    LONGTIME_UPDATE_STATS = {
+        "forwardPE": "forwardPE",
+        "priceToBook": "priceToBook",
+        "enterpriseToEbitda": "enterpriseToEbitda",
+        "currentRatio": "currentRatio",
+        "debtToEquity": "debtToEquity",
+        "returnOnEquity": "returnOnEquity",
+        "returnOnAssets": "returnOnAssets",
     }
 
     """
@@ -86,8 +140,8 @@ class Settings():
     LONGTIME_UPDATE_JOBNAME = "longtime-update-job"
     VERY_LONGTIME_UPDATE_JOBNAME = "very-longtime-update-job"
 
-    #max length of summary
-    MAX_SUMMARY_LENGTH = 520
+    #max length of summary (character)
+    MAX_SUMMARY_LENGTH = 1500
 
     # Merge of all configs for longtime updater jobs
     stock_update_jobs_config = [
@@ -105,7 +159,7 @@ class Settings():
             "jobtype": LONGTIME_UPDATE_JOBNAME,
             "chunk_size": LONGTIME_UPDATE_CHUNK_SIZE,
             "sleep_time": LONGTIME_UPDATE_SLEEP_TIME,
-            "use_fast_info": True
+            "use_fast_info": False
         },
         {
             "days": VERY_LONGTIME_UPDATE_TIME_BETWEEN_JOBS,
@@ -116,6 +170,9 @@ class Settings():
             "use_fast_info": False
         }
     ]
+
+    # AI summary redis duration(seconds)
+    AI_SUMMARY_REDIS_DURATION = 72000
 
 
 settings = Settings()
