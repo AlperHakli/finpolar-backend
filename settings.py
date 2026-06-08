@@ -6,9 +6,12 @@ load_dotenv()
 
 
 class Settings():
+
     DATABASE_URL = os.getenv("POSTRESQL_DATABASE_URL", "LOCALHOST_POSTRESQL_DATABASE_URL")
     REDIS_PORT = os.getenv("REDIS_PORT")
     REDIS_HOST = os.getenv("REDIS_HOST", "LOCAL_REDIS_HOST")
+
+
 
     #base project path
     BASE_DIR = Path(__file__).resolve().parent
