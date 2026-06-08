@@ -9,7 +9,7 @@ from project.ai.data_models import AgentState
 from langgraph.prebuilt import InjectedState
 from project.logic.exceptions import StockNotFoundException
 from project.logic.utils import ToolWrapper
-from project.logic.constants import ALL_TOOLS , ANALYSIS_TOOLS
+from project.ai.constants import ALL_TOOLS , ANALYSIS_TOOLS
 from project.logic.indicator_service import IndicatorService
 
 
@@ -20,35 +20,32 @@ async def get_stock(ticker: str) -> pl.DataFrame | str:
     :param ticker : ticker of specified stock
     Use it to get data from specified stock
     """
-    ticker.upper()
-    if not (ticker.endswith(".IS")):
-        ticker += ".IS"
+    try:
+        info = yf.download(ticker, period="6mo", interval="1d", auto_adjust=True)
 
-        try:
-            info = yf.download(ticker, period="6mo", interval="1d", auto_adjust=True)
+        if info is None or info.empty:
+            raise StockNotFoundException(
+                message="No data found for specified ticker",
+                ticker=ticker
+            )
 
-            if info is None or info.empty:
-                raise StockNotFoundException(
-                    message="No data found for specified ticker",
-                    ticker=ticker
-                )
+        if isinstance(info.columns, pd.MultiIndex):
+            info.columns = info.columns.get_level_values(0)
 
-            if isinstance(info.columns, pd.MultiIndex):
-                info.columns = info.columns.get_level_values(0)
+        info.columns = [str(col) for col in info.columns]
 
-            info.columns = [str(col) for col in info.columns]
+        info = info.reset_index()
 
-            info = info.reset_index()
+        info_polars = pl.from_pandas(info)
 
-            info_polars = pl.from_pandas(info)
+        return info_polars
 
-            return info_polars
+    except StockNotFoundException as s:
+        raise s
 
-        except StockNotFoundException as s:
-            raise s
+    except Exception as e:
+        return f"Some error occurded when fetch ticker data: {e}"
 
-        except Exception as e:
-            return f"Some error occurded when fetch ticker data: {e}"
 
 @ToolWrapper.register_tool(category="analysis")
 @tool

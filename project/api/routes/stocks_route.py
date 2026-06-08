@@ -52,19 +52,13 @@ async def stock_history(ticker: str , period: str):
 
 @router.post("/single-stock-indicators")
 async def get_single_stock_indicators(
-        ticker: str ,
         redis_manager: RedisDbDep,
-        period: str,
-        indicator_settings: GetSingleStockIndicatorModel = Depends()
-
+        indicator_settings: GetSingleStockIndicatorModel
 ):
     return await StockRepository.get_single_stock_indicators(
-        ticker=ticker ,
         indicator_settings=indicator_settings,
         redis_manager=redis_manager,
-        period=period
-
-    )
+ )
 
 @router.get("/watchlist")
 async def fetch_watchlist(redis_manager: RedisDbDep):

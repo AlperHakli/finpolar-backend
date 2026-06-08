@@ -8,7 +8,7 @@ from functools import wraps
 
 import yfinance
 
-from project.logic.constants import ALL_TOOLS, ANALYSIS_TOOLS
+from project.ai.constants import ALL_TOOLS, ANALYSIS_TOOLS
 from project.logic.exceptions import DataTypeException
 from settings import settings
 
@@ -81,17 +81,17 @@ class IndicatorCalculationUtils:
         else:
             return "1wk"
 
-    @staticmethod
-    def format_market_cap(n: int):
-        """
-        Format market cap string
-        """
-        if n is None: return "N/A"
-        for unit in ['', 'K', 'M', 'B', 'T']:
-            if abs(n) < 1000.0:
-                return f"{n:.2f}{unit}"
-            n /= 1000.0
-        return f"{n:.2f}T"
+    # @staticmethod
+    # def format_market_cap(n: int):
+    #     """
+    #     Format market cap string
+    #     """
+    #     if n is None: return "N/A"
+    #     for unit in ['', 'K', 'M', 'B', 'T']:
+    #         if abs(n) < 1000.0:
+    #             return f"{n:.2f}{unit}"
+    #         n /= 1000.0
+    #     return f"{n:.2f}T"
 
     # @staticmethod
     # def format_symbol(symbol: str):
@@ -137,14 +137,28 @@ class IndicatorCalculationUtils:
         """
         randomvariable = random.uniform(0.3, 1.2)
         return sleep_time + randomvariable
-
     @staticmethod
     def format_summary_length(summary_length: int, summary: str):
         """
-        Format summary length
-        :return: formatted summary
+        Format summary length if given max summary character length greater than length of summary returns summary
+        :return: first "." character of summary with greater character length than given summary length digit
         """
-        return summary[:summary_length] + "..." if len(summary) > summary_length else summary
+
+        if (len(summary) > summary_length):
+
+            sum_first_half = summary[:summary_length]
+            sum_second_half = summary[summary_length:]
+
+            summary_temp = ""
+            for c in sum_second_half:
+                summary_temp += c
+                if c == ".":
+                    break
+
+            return sum_first_half + summary_temp
+
+        else:
+            return summary
 
     # -- Formatter Orchestrator --
 

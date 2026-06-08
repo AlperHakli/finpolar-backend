@@ -108,45 +108,24 @@ async def lifespan(app: FastAPI):
     logger.info("**** All parallel tasks have been started ****")
 
     async with asyncio.TaskGroup() as tg:
-        async def daily_task():
-            async with get_postresql_db_ctx() as session:
-                await StockRepository.daily_job(
-                    database_model=StockStats,
-                    database_session=session,
-                    chunk_size=settings.DAILY_UPDATE_CHUNK_SIZE,
-                    sleep_time=settings.DAILY_UPDATE_SLEEP_TIME,
-                    stats=settings.DAILY_UPDATE_STATS,
-                    jobtype=settings.DAILY_UPDATE_JOBNAME,
-                    use_fast_info=True
-                )
+        for job_config in settings.stock_update_jobs_config:
 
-        async def longtime_task():
-            async with get_postresql_db_ctx() as session:
-                await StockRepository.daily_job(
-                    database_model=StockStats,
-                    database_session=session,
-                    chunk_size=settings.LONGTIME_UPDATE_CHUNK_SIZE,
-                    sleep_time=settings.LONGTIME_UPDATE_SLEEP_TIME,
-                    stats=settings.LONGTIME_UPDATE_STATS,
-                    jobtype=settings.LONGTIME_UPDATE_JOBNAME,
-                    use_fast_info=True
-                )
+            def create_parallel_task(config):
+                async def task_wrapper():
+                    async with get_postresql_db_ctx() as session:
+                        await StockRepository.daily_job(
+                            database_model=StockStats,
+                            database_session=session,
+                            chunk_size=config["chunk_size"],
+                            sleep_time=config["sleep_time"],
+                            stats=config["stats"],
+                            jobtype=config["jobtype"],
+                            use_fast_info=config["use_fast_info"]
+                        )
 
-        async def very_longtime_task():
-            async with get_postresql_db_ctx() as session:
-                await StockRepository.daily_job(
-                    database_model=StockStats,
-                    database_session=session,
-                    chunk_size=settings.VERY_LONG_TIME_CHUNK_SIZE,
-                    sleep_time=settings.VERY_LONGTIME_UPDATE_SLEEP_TIME,
-                    stats=settings.VERY_LONGTIME_UPDATE_STATS,
-                    jobtype=settings.VERY_LONGTIME_UPDATE_JOBNAME,
-                    use_fast_info=False
-                )
+                return task_wrapper
 
-        tg.create_task(daily_task())
-        tg.create_task(longtime_task())
-        tg.create_task(very_longtime_task())
+            tg.create_task(create_parallel_task(job_config)())
 
     logger.info("**** All parallel tasks have been completed ****")
 

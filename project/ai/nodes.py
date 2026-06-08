@@ -1,10 +1,41 @@
 from langchain_core.messages import ToolMessage
-from project.ai.data_models import AgentState
-from project.ai.model import basemodel
+from project.ai.data_models import AgentState, OutputParserModel
+from project.ai.model import basemodel, aimodel
 from project.ai.tools import get_stock
 from langgraph.graph import END
-from project.ai.prompts import SYSTEM_MESSAGE
-from project.logic.constants import ALL_TOOLS
+from project.ai.prompts import SYSTEM_MESSAGE , FORMATTER_SYSTEM_MESSAGE
+from project.ai.constants import ALL_TOOLS
+from langchain_core.messages import AIMessage
+
+
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+async def call_summary_model(state: AgentState):
+    messages = state.get("messages", [])
+
+    aimodel_with_structured_output = aimodel.with_structured_output(OutputParserModel)
+
+    cleaned_messages = []
+    for msg in messages:
+        if isinstance(msg, ToolMessage):
+            cleaned_messages.append(HumanMessage(content=f"Tool Output: {msg.content}"))
+        elif isinstance(msg, AIMessage):
+
+            cleaned_messages.append(AIMessage(content=msg.content or "Analyzing..."))
+        else:
+            cleaned_messages.append(msg)
+
+    full_prompt = [FORMATTER_SYSTEM_MESSAGE] + cleaned_messages
+
+    response = await aimodel_with_structured_output.ainvoke(full_prompt)
+
+    final_score = getattr(response, "score", "50")
+
+    return {"messages": [AIMessage(content=str(final_score))]}
+
+
+
+
 async def call_model(state: AgentState):
     messages = state.get("messages" , [])
 
@@ -38,6 +69,8 @@ async def call_model(state: AgentState):
     response = await model_with_tools.ainvoke([SYSTEM_MESSAGE] + limited_history)
 
     return {"messages" : [response]}
+
+
 
 def should_continue(state: AgentState):
     messages = state["messages"]
