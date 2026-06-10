@@ -17,6 +17,23 @@ router = APIRouter(prefix="/stocks", tags=["Stock Operations"])
 #     return await StockRepository.get_all_stocks()
 
 
+@router.get("/multiple-stocks-filtered-by-sector")
+async def multiple_stocks_by_sector(sector: str , database_session : PostreSqlDbDep):
+    """Fetch some number of stocks with given sector"""
+    return await StockRepository.get_multiple_stocks_by_sector(
+        sector=sector,
+        database_session=database_session,
+        database_model=StockStats
+    )
+
+@router.get("/get-top-10-volume-stock-details")
+async def get_top_10_volume_stock_details(redis_manager: RedisDbDep , database_session: PostreSqlDbDep):
+    """fetch 10 stocks that have most volumes"""
+    return await StockRepository.get_top_10_with_details(
+        redis_manager=redis_manager,
+        database_session=database_session
+    )
+
 @router.get("/stock-detail")
 async def stock_details(
         ticker: str,

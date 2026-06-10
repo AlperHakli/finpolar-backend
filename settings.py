@@ -10,12 +10,14 @@ class Settings():
 
 
 
-    DATABASE_URL = os.getenv("POSTRESQL_DATABASE_URL")
+    # DATABASE_URL = os.getenv("POSTRESQL_DATABASE_URL")
+    # REDIS_PORT = os.getenv("REDIS_PORT")
+    # REDIS_HOST = os.getenv("REDIS_HOST")
 
-
+    DATABASE_URL = os.getenv("LOCALHOST_POSTRESQL_DATABASE_URL")
     REDIS_PORT = os.getenv("REDIS_PORT")
-    REDIS_HOST = os.getenv("REDIS_HOST")
-    # "REDIS_HOST",
+    REDIS_HOST = os.getenv("LOCAL_REDIS_HOST")
+
 
 
 
@@ -38,7 +40,7 @@ class Settings():
     #sleep time (seconds) between chunks for realtime update function
     REALTIME_UPDATE_SLEEP_TIME = 0.5
     #time between jobs (minutes) for realtime update function
-    REALTIME_UPDATE_TIME_BETWEEN_JOBS = 5
+    REALTIME_UPDATE_TIME_BETWEEN_JOBS = 240
 
     #chunk size for longtime update function
     LONGTIME_UPDATE_CHUNK_SIZE = 50
@@ -142,6 +144,9 @@ class Settings():
 
     #max length of summary (character)
     MAX_SUMMARY_LENGTH = 1500
+
+    #number of stocks that fetch with given sector
+    STOCK_NUMBER_FETCH_WITH_GIVEN_SECTOR = 10
 
     # Merge of all configs for longtime updater jobs
     stock_update_jobs_config = [
