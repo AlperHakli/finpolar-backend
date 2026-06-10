@@ -4,6 +4,7 @@ from typing import Type
 import yfinance
 import logging
 import hashlib
+from settings import settings
 import polars as pl
 import pandas as pd
 from sqlmodel import select, update, func, Numeric, delete, col
@@ -13,13 +14,100 @@ from project.api.base_models import StockStats, GetSingleStockIndicatorModel, St
 from project.logic.indicator_service import IndicatorService
 from project.api.redis_client import RedisClient
 
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
 
 class StockRepository():
+    @staticmethod
+    async def get_multiple_stocks_by_sector(
+            sector: str,
+            database_session: AsyncSession,
+            database_model: type[StatBase] = StockStats
+
+    ):
+        """Fetch stocks wtih given sector
+        :param sector: sector of asset
+        :param database_session: postresql database that contain stock informations
+        :param database_model: base stock stats model
+        :return: all stocks with respect to given sector
+        available sectors:
+
+        """
+        statement = select(
+            database_model.symbol,
+            database_model.name,
+            database_model.previousClose,
+            database_model.open,
+            database_model.dayHigh,
+            database_model.dayLow,
+            database_model.sector,
+            database_model.lastVolume,
+        ).where(database_model.sector == sector).order_by(func.random()).limit(settings.STOCK_NUMBER_FETCH_WITH_GIVEN_SECTOR)
+        result = await database_session.execute(statement)
+        stocks = result.scalars().all()
+        if not stocks:
+            logger.error(f"No stock fetch with given sector: {sector}")
+            return
+        return stocks
+
+    @staticmethod
+    async def get_top_10_with_details(redis_manager, database_session: AsyncSession):
+        """
+        Return top 10 volumed stocks with more detailed informations
+        :param redis_manager: redis db that contain market:top_volume
+        :param database_session: postresql database that contain stock informations
+        :return: top 10 volumed stocks with these informations:
+
+                    "symbol": detail.symbol,
+                    "name": detail.name,
+                    "open": detail.open,
+                    "dayHigh": detail.dayHigh,
+                    "dayLow": detail.dayLow,
+                    "previousClose": detail.previousClose,
+                    "sector": detail.sector,
+                    "lastVolume": detail.lastVolume
+
+        """
+
+        cached_watchlist = await redis_manager.getRedis("market:top_volume")
+
+        if not cached_watchlist:
+            return []
+
+
+        ticker_names = [item["symbol"] for item in cached_watchlist]
+
+
+        statement = select(StockStats).where(StockStats.symbol.in_(ticker_names))
+        result = await database_session.execute(statement)
+        db_details = result.scalars().all()
+
+
+        enriched_list = []
+        for detail in db_details:
+            enriched_list.append(
+                {
+                    "symbol": detail.symbol,
+                    "name": detail.name,
+                    "open": detail.open,
+                    "dayHigh": detail.dayHigh,
+                    "dayLow": detail.dayLow,
+                    "previousClose": detail.previousClose,
+                    "sector": detail.sector,
+                    "lastVolume": detail.lastVolume
+                }
+            )
+
+        return enriched_list
+
+
+
+
+
+
+
     @staticmethod
     async def get_single_asset(
             symbol: str,
@@ -188,7 +276,6 @@ class StockRepository():
             "top_volume": await redis_manager.getRedis("market:top_volume"),
             "top_gainers": await redis_manager.getRedis("market:top_gainers"),
             "top_losers": await redis_manager.getRedis("market:top_losers")
-
         }
         return tempdict
 
@@ -214,8 +301,9 @@ class StockRepository():
         :return:
         """
         try:
-            # if not IndicatorCalculationUtils.work_time_controller():
-            #     return
+            if not IndicatorCalculationUtils.work_time_controller():
+                return
+
             sleep_time_rnd_added = IndicatorCalculationUtils.add_random_seconds_to_sleep_time_between_chunks(sleep_time=sleep_time)
 
             statement = select(database_model)
