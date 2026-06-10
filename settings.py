@@ -10,13 +10,13 @@ class Settings():
 
 
 
-    # DATABASE_URL = os.getenv("POSTRESQL_DATABASE_URL")
-    # REDIS_PORT = os.getenv("REDIS_PORT")
-    # REDIS_HOST = os.getenv("REDIS_HOST")
-
-    DATABASE_URL = os.getenv("LOCALHOST_POSTRESQL_DATABASE_URL")
+    DATABASE_URL = os.getenv("POSTRESQL_DATABASE_URL")
     REDIS_PORT = os.getenv("REDIS_PORT")
-    REDIS_HOST = os.getenv("LOCAL_REDIS_HOST")
+    REDIS_HOST = os.getenv("REDIS_HOST")
+
+    # DATABASE_URL = os.getenv("LOCALHOST_POSTRESQL_DATABASE_URL")
+    # REDIS_PORT = os.getenv("REDIS_PORT")
+    # REDIS_HOST = os.getenv("LOCAL_REDIS_HOST")
 
 
 
