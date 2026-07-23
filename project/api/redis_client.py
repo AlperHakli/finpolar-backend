@@ -8,17 +8,15 @@ from settings import  settings
 logger = logging.getLogger(__name__)
 
 class RedisClient():
-    def __init__(self , redis_port: int , redis_host: str):
-        self.redis_port = redis_port
-        self.redis_host = redis_host
+    def __init__(self , redis_url: str):
+        self.redis_url = redis_url
         self.redis_client = None
 
     async def connect(self):
         if self.redis_client is None:
-            self.redis_client = redis.Redis(
+            self.redis_client = redis.from_url(
+                url=self.redis_url,
                 decode_responses=True,
-                port=self.redis_port,
-                host=self.redis_host
             )
             logger.info("Connected to Redis successfully")
 
