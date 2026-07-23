@@ -28,6 +28,8 @@ dependencies = [
     "asyncpg",
     "redis",
 
+    "psycopg2",
+
 
 
     #cron jobs
