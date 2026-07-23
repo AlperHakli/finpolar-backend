@@ -203,6 +203,6 @@ class HelperFunctions():
         """
         fetch history of given symbol with respect to period and interval
         """
-        stock = yfinance.Ticker(ticker=symbol)
-        df_pd = stock.history(period=period, interval=interval)
+        asset = yfinance.Ticker(ticker=symbol)
+        df_pd = asset.history(period=period, interval=interval)
         return df_pd
