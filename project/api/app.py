@@ -47,10 +47,11 @@ class TaskAndJobWrappers():
             await StockRepository.recalculate_all_pe_ratios(database_session=session, database_model=database_model)
 
     @staticmethod
-    async def update_realtime_stock_highlights_wraps(
+    async def update_realtime_data_wraps(
             database_model: Type[StatBase],
             chunk_size: int,
             sleep_time: float,
+            stock_indexes:list[str],
             database_session: Callable[[], AsyncContextManager],
             redis_manager: RedisClient
     ):
@@ -58,10 +59,11 @@ class TaskAndJobWrappers():
         wrapper for update realtime stock highlights
         """
         async with database_session() as session:
-            await StockRepository.update_realtime_stock_highlights(
+            await StockRepository.update_realtime_data(
                 database_model=database_model,
                 database_session=session,
                 redis_manager=redis_manager,
+                stock_indexes=stock_indexes,
                 chunk_size=chunk_size,
                 sleep_time=sleep_time
             )
@@ -69,16 +71,37 @@ class TaskAndJobWrappers():
     @staticmethod
     async def universal_daily_job_wrapper(
             database_session: Callable[[], AsyncContextManager],
-            **job_params  # kwargs
+            job_params: dict
     ):
         """
         Shared async wrapper for all longtime tasks
+        :param database_session: current postresql database session
+        :param job_params: settings that will apply to all longtime cron jobs
+        example job_params:
+        "stock": {
+                "days": DAILY_UPDATE_TIME_BETWEEN_JOBS,
+                "stats": STOCK_DAILY_UPDATE_STATS,
+                "jobtype": f"stock_{DAILY_UPDATE_JOBNAME}",
+                "chunk_size": DAILY_UPDATE_CHUNK_SIZE,
+                "sleep_time": DAILY_UPDATE_SLEEP_TIME,
+                "use_fast_info": True
+            },
+            "commodity": {
+                "days": DAILY_UPDATE_TIME_BETWEEN_JOBS,
+                "stats": COMMODITY_DAILY_UPDATE_STATS,
+                "jobtype": f"commodity_{DAILY_UPDATE_JOBNAME}",
+                "chunk_size": DAILY_UPDATE_CHUNK_SIZE,
+                "sleep_time": DAILY_UPDATE_SLEEP_TIME,
+                "use_fast_info": False
+            }
         """
-        async with database_session() as session:
-            await StockRepository.daily_job(
-                database_session=session,
-                **job_params
-            )
+        for params in job_params:
+            async with database_session() as session:
+                await StockRepository.daily_job(
+                    database_session=session,
+                    **params
+                )
+
 
 
 @asynccontextmanager
@@ -93,45 +116,50 @@ async def lifespan(app: FastAPI):
     scheduler = AsyncIOScheduler()
 
     #initializes db and inserts name and symbol
-    async def initialize_db_wrapper():
-        async with get_postresql_db_ctx() as session:
-            await StockRepository.initialize_db(
-                file_path=settings.STOCK_SEED_FILEPATH,
-                database_session=session,
-                database_model=StockStats,
-            )
+    async with asyncio.TaskGroup() as tg:
+        for table_model, file_path in dict.items(settings.DATABASE_SEEDING_SETTINGS):
+            async def run_seed(model = table_model , path = file_path):
+                logger.info(f"Seeding database: {table_model} with path: {file_path}")
+                async with get_postresql_db_ctx() as session:
+                   await StockRepository.initialize_db(database_model=model, file_path=path, database_session=session)
+                logger.info(f"Seeding has been completed for {model} with path: {file_path}")
 
-    await initialize_db_wrapper()
+            tg.create_task(run_seed())
+
 
     logger.info("Database successfully seeded")
 
     logger.info("**** All parallel tasks have been started ****")
 
-    async with asyncio.TaskGroup() as tg:
-        for job_config in settings.stock_update_jobs_config:
+    if not settings.PRODUCTION_MODE:
+        async with asyncio.TaskGroup() as tg:
+            for period_key , period_values in settings.stock_update_jobs_config.items():
+                logger.info(f"starting period: '{period_key}'")
+                def create_parallel_task(inside_period_values = period_values):
+                    async def task_wrapper():
+                        for asset_name , asset_values in inside_period_values.items():
+                            logger.info(f"staring asset {asset_name} that works once in {asset_values.get("days")}")
+                            async with get_postresql_db_ctx() as session:
+                                await StockRepository.daily_job(
+                                    database_model=settings.ASSET_NAME_TO_TABLE_MODEL_SETTINGS.get(asset_name),
+                                    database_session=session,
+                                    chunk_size=asset_values.get("chunk_size"),
+                                    sleep_time=asset_values.get("sleep_time"),
+                                    stats=asset_values.get("stats"),
+                                    jobtype=asset_values.get("jobtype"),
+                                    use_fast_info=asset_values.get("use_fast_info")
+                                )
 
-            def create_parallel_task(config):
-                async def task_wrapper():
-                    async with get_postresql_db_ctx() as session:
-                        await StockRepository.daily_job(
-                            database_model=StockStats,
-                            database_session=session,
-                            chunk_size=config["chunk_size"],
-                            sleep_time=config["sleep_time"],
-                            stats=config["stats"],
-                            jobtype=config["jobtype"],
-                            use_fast_info=config["use_fast_info"]
-                        )
+                    return task_wrapper
 
-                return task_wrapper
+                tg.create_task(create_parallel_task()())
+        logger.info("**** All parallel tasks have been completed ****")
 
-            tg.create_task(create_parallel_task(job_config)())
 
-    logger.info("**** All parallel tasks have been completed ****")
 
     # -- Stock Highlights updater job --
     scheduler.add_job(
-        TaskAndJobWrappers.update_realtime_stock_highlights_wraps,
+        TaskAndJobWrappers.update_realtime_data_wraps,
         trigger="interval",
         next_run_time=datetime.now(),
         minutes=settings.REALTIME_UPDATE_TIME_BETWEEN_JOBS,
@@ -139,26 +167,25 @@ async def lifespan(app: FastAPI):
             "database_model": StockStats, "chunk_size": settings.REALTIME_UPDATE_CHUNK_SIZE,
             "sleep_time": settings.REALTIME_UPDATE_SLEEP_TIME,
             "database_session": get_postresql_db_ctx,
-            "redis_manager": redis_manager
+            "redis_manager": redis_manager,
+            "stock_indexes":settings.TR_STOCK_INDEXES
 
         }
     )
 
     # -- All stock longtime updater jobs --
-    for kwargs in settings.stock_update_jobs_config:
-        jobkwargs = {
-            **kwargs,
-            "database_model": StockStats,
-            "database_session": get_postresql_db_ctx,
+    for period_key , period_values in settings.stock_update_jobs_config.items():
+        day = settings.STOCK_UPDATE_INTERVALS.get(period_key)
+        kwargs = {
+            "database_session" : get_postresql_db_ctx,
+            "job_params" : period_values,
         }
-
-        days = jobkwargs.pop("days")
-
+        # TODO cron job işini stock update jobs config e uyacak şekilde ayarla daily_job_wrapper tarafı tamam bu kısmı hallet
         scheduler.add_job(
             TaskAndJobWrappers.universal_daily_job_wrapper,
             trigger="interval",
-            days=days,
-            kwargs=jobkwargs
+            days=day,
+            kwargs=kwargs
 
         )
 

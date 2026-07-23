@@ -5,7 +5,7 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 
-RUN uv sync --frozen --no-dev --no-cache
+RUN uv pip install --system --no-cache -r pyproject.toml
 
 COPY . .
 

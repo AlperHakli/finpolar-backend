@@ -1,12 +1,24 @@
-from typing import Any
+from typing import Any , List
 
-from pydantic import BaseModel , field_validator
+from pydantic import BaseModel , field_validator , Field as pydanticField
 from sqlmodel import SQLModel, Field
 
-#langgraph state model
+
+class AssetRouteBaseModels:
+    class AssetHistoryRequestModel(BaseModel):
+        ticker: str = pydanticField(default=None, description="symbol of relevant asset")
+        period: str = pydanticField(
+            default="1d", description="how long history will be default (1d) available (1d , 5d , 1mo , 2mo , 6mo , 1y , 10y)")
+
+    class BatchAssetHistoryModel(BaseModel):
+        requests: List['AssetRouteBaseModels.AssetHistoryRequestModel'] = Field(..., max_items=10)
+
+
+
+# langgraph state model
 class AnalysisModel(BaseModel):
-    message: str = Field(default=None, title="Prompt of user")
-    session_id: str = Field(default=None, title="Session id of conversation ")
+    message: str = pydanticField(default=None, title="Prompt of user")
+    session_id: str = pydanticField(default=None, title="Session id of conversation ")
 
 
 #fastapi get single stock indicator model
@@ -41,36 +53,41 @@ class StatBase(SQLModel):
     dayLow: float | None = Field(default=0.0, description="lowest price of yesterday")
     volume: float | None = Field(default=0.0, description="volume of stock")
     open: float | None = Field(default=0.0, description="open price of asset")
-    marketCap: float | None = Field(default=0.0, description="market capacity of asset")
+
 
     lastVolume: float | None = Field(default=0.0 , description="daily volume of asset")
     avgVolume10Days: float | None = Field(default=0.0, description="average volume of last 10 days")
     avg50Days: float | None = Field(default=0.0, description="average volume of last 50 days")
     avgVolume3Months: float | None = Field(default=0.0, description="average volume of last 3 months")
     avg200Days: float | None = Field(default=0.0, description="average volume of last 3 months")
-
-
-    # updates one time in 3 days
-    priceToBook: float | None = Field(default=0.0, description="value of asset")
-    enterpriseToEbitda: float | None = Field(default=0.0, description="value of company")
     yearHigh: float | None = Field(default=0.0, description="highest price in current year")
     yearLow: float | None = Field(default=0.0, description="lowest price in current year")
-    trailingPE: float | None = Field(default=0.0 , description="trailing pe ratio")
-    forwardPE: float | None = Field(default=0.0 , description="forward pe ratio")
 
-    currentRatio: float | None = Field(default=0.0 , description="current ratio of asset")
-    debtToEquity: float | None = Field(default=0.0 , description="debt to equity of asset")
-    returnOnEquity: float | None = Field(default=0.0 , description="return on equity of asset")
-    returnOnAssets: float | None = Field(default=0.0 , description="return on assets")
+
 
 
 class StockStats(StatBase, table=True):
+    """
+    Main model for stock table
+    """
     # -- Constant features --
-    # -- Dynamic features --
     sector: str | None = Field(default="none")
     summary: str | None = Field(default="none")
     eps: float | None = Field(default=0.0)
 
+    # -- Dynamic features --
+    # updates one time in 3 days
+    enterpriseToEbitda: float | None = Field(default=0.0, description="value of company")
+    priceToBook: float | None = Field(default=0.0, description="value of asset")
+    trailingPE: float | None = Field(default=0.0 , description="trailing pe ratio")
+    forwardPE: float | None = Field(default=0.0 , description="forward pe ratio")
+    currentRatio: float | None = Field(default=0.0 , description="current ratio of asset")
+    debtToEquity: float | None = Field(default=0.0 , description="debt to equity of asset")
+
+    returnOnEquity: float | None = Field(default=0.0 , description="return on equity of asset")
+    returnOnAssets: float | None = Field(default=0.0 , description="return on assets")
+    # updates daily
+    marketCap: float | None = Field(default=0.0, description="market capacity of asset")
     @field_validator(
         "previousClose", "dayHigh", "dayLow", "open", "yearHigh", "yearLow",
         "priceToBook", "enterpriseToEbitda", "trailingPE", "forwardPE",
@@ -88,3 +105,10 @@ class StockStats(StatBase, table=True):
             return round(float(value), 2)
         except (ValueError, TypeError):
             return 0.0
+
+
+class CommodityStats(StatBase , table= True):
+    """
+    Main model for Commodity like gold
+    """
+

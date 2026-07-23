@@ -1,61 +1,150 @@
 import asyncio
 import json
-from typing import Type
+import os.path
+from collections import defaultdict
 import yfinance
 import logging
-import hashlib
-from settings import settings
 import polars as pl
 import pandas as pd
-from sqlmodel import select, update, func, Numeric, delete, col
+from sqlmodel import select, update, func, Numeric, delete, col, over, or_
 from project.logic.exceptions import StockNotFoundException, YfinanceApiException, SeedFileNotFoundException
 from project.logic.utils import IndicatorCalculationUtils, HelperFunctions
-from project.api.base_models import StockStats, GetSingleStockIndicatorModel, StatBase
+from project.api.base_models import StockStats, GetSingleStockIndicatorModel, StatBase, AssetRouteBaseModels
 from project.logic.indicator_service import IndicatorService
 from project.api.redis_client import RedisClient
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
 
 class StockRepository():
+    from collections import defaultdict
+    from typing import Any, Dict, List, Type
+
+    from sqlalchemy import func
+    from sqlmodel import select
+    from sqlalchemy.sql import over
+
     @staticmethod
-    async def get_multiple_stocks_by_sector(
-            sector: str,
+    async def get_multiple_stocks_by_sector_list(
+            sector_list: list[str],
             database_session: AsyncSession,
-            database_model: type[StatBase] = StockStats
+            database_model: Type[StatBase] = StockStats,
+            limit_per_sector: int = 10
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        print(f"SECTOR LIST: {sector_list}")
 
-    ):
-        """Fetch stocks wtih given sector
-        :param sector: sector of asset
-        :param database_session: postresql database that contain stock informations
-        :param database_model: base stock stats model
-        :return: all stocks with respect to given sector
-        available sectors:
+        row_num = over(
+            func.row_number(),
+            partition_by=database_model.sector,
+            order_by=func.random()
+        ).label("row_num")
 
+        subquery = (
+            select(
+                database_model.symbol.label("symbol"),
+                database_model.name.label("name"),
+                database_model.previousClose.label("previousClose"),
+                database_model.open.label("open"),
+                database_model.dayHigh.label("dayHigh"),
+                database_model.dayLow.label("dayLow"),
+                database_model.sector.label("sector"),
+                database_model.lastVolume.label("lastVolume"),
+                row_num,
+            )
+            .where(database_model.sector.in_(sector_list))
+            .subquery()
+        )
+
+        stmt = (
+            select(subquery)
+            .where(subquery.c.row_num <= limit_per_sector)
+        )
+
+        result = await database_session.execute(stmt)
+        rows = result.mappings().all()
+
+        grouped_result = defaultdict(list)
+
+        for row in rows:
+            grouped_result[row["sector"]].append(
+                {
+                    "symbol": row["symbol"],
+                    "name": row["name"],
+                    "previousClose": row["previousClose"],
+                    "open": row["open"],
+                    "dayHigh": row["dayHigh"],
+                    "dayLow": row["dayLow"],
+                    "lastVolume": row["lastVolume"],
+                }
+            )
+
+        return dict(grouped_result)
+
+    @staticmethod
+    async def search_asset_service(search_key: str, database_session: AsyncSession, database_model: type[StatBase]):
         """
-        statement = select(
-            database_model.symbol,
-            database_model.name,
-            database_model.previousClose,
-            database_model.open,
-            database_model.dayHigh,
-            database_model.dayLow,
-            database_model.sector,
-            database_model.lastVolume,
-        ).where(database_model.sector == sector).order_by(func.random()).limit(settings.STOCK_NUMBER_FETCH_WITH_GIVEN_SECTOR)
+        :param database_session: current postresql session
+        :return: five of asset that most like search key
+        """
+        formatted_search = f"%{search_key.strip()}%"
+        statement = (select(database_model.name, database_model.symbol)
+                     .where(
+            or_(
+                database_model.symbol.ilike(formatted_search)
+                , database_model.name.ilike(formatted_search)
+            )
+        ).limit(5))
         result = await database_session.execute(statement)
-        stocks = result.scalars().all()
-        if not stocks:
-            logger.error(f"No stock fetch with given sector: {sector}")
-            return
-        return stocks
+        resultfinal = result.mappings().all()
+
+        return resultfinal
+
+    @staticmethod
+    async def get_random_10_assets_from_all_asset_types(database_session: AsyncSession , database_models: list[StatBase]):
+        try:
+            responsedict= {}
+            for model in database_models:
+                responsedict[model.__tablename__] = await StockRepository.get_random_10_assets(database_session=database_session , database_model=model)
+            return {"status" : "success" , "count" : len(responsedict) , "data" : responsedict}
+
+        except Exception as e:
+            logger.error(f"An error occurded {e}")
+            raise
+
+    @staticmethod
+    async def get_random_10_assets(database_session: AsyncSession , database_model: StatBase):
+        try:
+            statement = select(database_model).order_by(func.random()).limit(10)
+            response = await database_session.execute(statement)
+            rows = response.scalars().all()
+            responselist = []
+            for row in rows:
+                responselist.append(
+
+                    {
+                        "symbol": row.symbol,
+                        "name": row.name,
+                        "previousClose": row.previousClose,
+                        "open": row.open,
+                        "dayHigh": row.dayHigh,
+                        "dayLow": row.dayLow,
+                    }
+
+                )
+
+            return responselist
+
+        except Exception as e:
+            logger.error(f"An error occurded {e}")
+            raise
+
+
 
     @staticmethod
     async def get_top_10_with_details(redis_manager, database_session: AsyncSession):
         """
-        Return top 10 volumed stocks with more detailed informations
+        Return top 10 volumed assets with more detailed informations
         :param redis_manager: redis db that contain market:top_volume
         :param database_session: postresql database that contain stock informations
         :return: top 10 volumed stocks with these informations:
@@ -76,14 +165,11 @@ class StockRepository():
         if not cached_watchlist:
             return []
 
-
         ticker_names = [item["symbol"] for item in cached_watchlist]
-
 
         statement = select(StockStats).where(StockStats.symbol.in_(ticker_names))
         result = await database_session.execute(statement)
         db_details = result.scalars().all()
-
 
         enriched_list = []
         for detail in db_details:
@@ -101,12 +187,6 @@ class StockRepository():
             )
 
         return enriched_list
-
-
-
-
-
-
 
     @staticmethod
     async def get_single_asset(
@@ -175,11 +255,12 @@ class StockRepository():
                 return fresh_data
 
             new_data = await asyncio.to_thread(get_info, missing_stats, symbol)
-
+            redis_tasks = []
             for stat, val in new_data.items():
                 attributes[stat] = val
-
-                await redis_manager.setRedis(f"stock:{symbol}:{stat}", val, exp=30)
+                redis_tasks.append(redis_manager.setRedis(f"stock:{symbol}:{stat}", val, exp=30))
+            if redis_tasks:
+                await asyncio.gather(*redis_tasks)
 
         return attributes
 
@@ -201,7 +282,6 @@ class StockRepository():
         redisresult = await StockRepository.get_single_asset_realtime_data(symbol=symbol, stats=redis_stats, redis_manager=redis_manager)
         dbresult = await StockRepository.get_single_asset(symbol=symbol, database_session=database_session, database_model=database_model)
 
-
         currentPrice = redisresult.get("last_price", 0.0)
         previousClose = dbresult.get("previousClose", 0.0)
 
@@ -220,16 +300,49 @@ class StockRepository():
         return redisresult | dbresult | newdict
 
     @staticmethod
-    async def get_single_asset_history(ticker: str, period: str):
+    async def get_multiple_asset_history(payload: list[AssetRouteBaseModels.AssetHistoryRequestModel])\
+            -> dict:
         """
-        Fetch only history data of stock
-        :param ticker: symbol of relevant stock
-        :param period: period (1mo , 1h , 1y etc.)
+        Fetch multiple asset history with given tickerlist and period
+        :param payload: ticker and period list
+        example payload:
+        [
+            {"ticker": "THYAO.IS", "period": "1d"},
+            {"ticker": "GC=F", "period": "1mo"}
+        ]
+
+        """
+        try:
+            response = {}
+            for item in payload:
+
+                history = await StockRepository.get_single_asset_history(ticker=item.ticker, period=item.period)
+                tickerdict = {"symbol": item.ticker}
+                historydict= {"history": history.get("history")}
+                perioddict = {"period" : item.period}
+                response[item.ticker] = tickerdict | historydict | perioddict
+
+
+
+            return {"status": "success" , "count" : len(response) , "data": response}
+
+
+        except Exception as e:
+            logger.error(f"Error get_multiple_asset_history ")
+            raise
+
+    @staticmethod
+    async def get_single_asset_history(ticker: str, period: str)\
+            -> dict:
+        """
+        Fetch history data of asset
+        :param ticker: symbol of relevant asset
+        :param period: history period of relevant asset available (1d , 5d , 1mo , 2mo , 6mo , 1y , 10y)
         :return: stock history with respect to given period
         """
         try:
 
-            df = await StockRepository._fetch_raw_stock_history_df(ticker=ticker, period=period)
+            df = await StockRepository._fetch_raw_asset_history(ticker=ticker, period=period)
 
             time_col = "Date" if "Date" in df.columns else "Datetime"
 
@@ -246,11 +359,11 @@ class StockRepository():
             logger.warning(f"Invalid or missing ticker when get_single_stock : {ticker}")
             raise
         except Exception as e:
-            logger.error(f"Error when get_single_stock_history {ticker}")
+            logger.error(f"Error get_single_stock_history {ticker}")
             raise YfinanceApiException(technical_detail=str(e))
 
     @staticmethod
-    async def _fetch_raw_stock_history_df(ticker: str, period: str):
+    async def _fetch_raw_asset_history(ticker: str, period: str):
         """
         Fetch data from yfinance returns raw polars dataframe
         """
@@ -280,29 +393,74 @@ class StockRepository():
         return tempdict
 
     @staticmethod
-    async def update_realtime_stock_highlights(
+    async def update_realtime_data(
+            database_model: Type[StatBase],
+            database_session: AsyncSession,
+            redis_manager: RedisClient,
+            stock_indexes: list[str],
+            chunk_size: int = 100,
+            sleep_time: float = 0.5
+    ):
+        """
+        Updates Realtime data like top 10 stocks
+
+        Uses both redis and postresql
+        uses current_price from redis
+        uses previousClose , name and symbol from postresql
+
+
+        :param database_model: database table model
+        :param database_session: current database session
+        :param redis_manager: redis database manager
+        :param stock_indexes: stock market indexes that will update
+        :param chunk_size: determines how many assets will begin to process in single time
+        :param sleep_time: duration between chunks
+        """
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(
+                StockRepository.update_top_stocks(
+                    database_model=database_model,
+                    database_session=database_session,
+                    redis_manager=redis_manager,
+                    chunk_size=chunk_size,
+                    sleep_time=sleep_time
+                )
+            )
+
+            tg.create_task(
+                StockRepository.update_stock_market_index(
+                    redis_manager=redis_manager,
+                    stock_indexes=stock_indexes,
+                    database_session=database_session,
+                    database_model=database_model
+                )
+
+            )
+
+    @staticmethod
+    async def update_top_stocks(
             database_model: Type[StatBase],
             database_session: AsyncSession,
             redis_manager: RedisClient,
             chunk_size: int = 100,
             sleep_time: float = 0.5
+
     ):
-        """
-        Writes most increased and decreased 10 stocks and writes top 10 stocks that have the most volume to redis
-        Uses both redis and postresql
+
+        """Uses both redis and postresql
         uses current_price from redis
         uses previousClose , name and symbol from postresql
+
 
         :param database_model: database table model
         :param database_session: current database session
         :param redis_manager: redis database manager
+
         :param chunk_size: determines how many assets will begin to process in single time
-        :param sleep_time: duration between chunks
-        :return:
-        """
+        :param sleep_time: duration between chunks"""
         try:
-            if not IndicatorCalculationUtils.work_time_controller():
-                return
+            # if not IndicatorCalculationUtils.work_time_controller():
+            #     return
 
             sleep_time_rnd_added = IndicatorCalculationUtils.add_random_seconds_to_sleep_time_between_chunks(sleep_time=sleep_time)
 
@@ -387,6 +545,72 @@ class StockRepository():
             logger.error(f"Realtime highlights error: {e}")
 
     @staticmethod
+    async def get_market_indices_service(redis_manager: RedisClient):
+        cache_key = "stock-index:TR"
+        return await redis_manager.getRedis(cache_key)
+
+    @staticmethod
+    async def update_stock_market_index(
+            redis_manager: RedisClient,
+            stock_indexes: list[str],
+            database_model: Type[StatBase],
+            database_session: AsyncSession,
+    ):
+        cache_key = "stock-index:TR"
+        temp_info = []
+
+        statement = select(database_model).where(database_model.symbol.in_(stock_indexes))
+        execution = await database_session.execute(statement)
+
+        db_stocks_map = {stock.symbol: stock for stock in execution.scalars().all()}
+
+        for symbol in stock_indexes:
+            try:
+
+                ticker = yfinance.Ticker(symbol)
+                info = ticker.info
+
+                lastPrice = info.get("regularMarketPrice")
+                previousClose = info.get("regularMarketPreviousClose")
+                name = info.get("shortName", symbol)
+
+                if lastPrice is None or previousClose is None:
+                    logger.warning(f"yfinance {symbol} için boş döndü. DB fallback devreye giriyor...")
+                    db_result = db_stocks_map.get(symbol)
+
+                    if db_result and db_result.previousClose:
+                        lastPrice = db_result.previousClose
+                        previousClose = db_result.previousClose
+                    else:
+
+                        lastPrice = 0.0
+                        previousClose = 0.0
+
+                changeDigit = lastPrice - previousClose
+                changePercent = IndicatorCalculationUtils.change_percent_calculator(
+                    current_close=lastPrice,
+                    prev_close=previousClose
+                )
+
+                temp_info.append(
+                    {
+                        "symbol": symbol,
+                        "name": name,
+                        "lastPrice": lastPrice,
+                        "previousClose": previousClose,
+                        "changeDigit": changeDigit,
+                        "changePercent": changePercent,
+                    }
+                )
+
+            except Exception as e:
+                logger.error(f"{symbol} endeksi işlenirken hata oluştu, pas geçiliyor: {e}")
+                continue
+
+        await redis_manager.setRedisNoDictNoExp(name=cache_key, value=json.dumps(temp_info))
+        logger.info("Endeks verileri başarıyla Redis'e yazıldı.")
+
+    @staticmethod
     async def _fetch_symbols_from_database(
             database_model: Type[StatBase],
             database_session: AsyncSession
@@ -445,9 +669,10 @@ class StockRepository():
             return value
 
         try:
-            remaining = len(symbols)
+
             for i in range(0, len(symbols), chunk_size):
                 chunk = symbols[i: i + chunk_size]
+                remaining = len(symbols) - (i + len(chunk))
                 logger.info(f"Processing chunk on {jobtype}: {len(chunk)} symbols")
 
                 for symbol in chunk:
@@ -564,9 +789,7 @@ class StockRepository():
                 "rvol": await redis_manager.getRedis(keys["rvol"])
             }
 
-
             missing_indicators = [name for name, val in cached_data.items() if not val]
-
 
             if not missing_indicators:
                 logger.info(f"Cache HIT for all indicators of {ticker} ({period})")
@@ -578,14 +801,12 @@ class StockRepository():
                     "volume_analysis": cached_data["rvol"]
                 }
 
-
             logger.info(f"Cache MISS on indicators: {missing_indicators}. Fetching data from DB...")
-            df = await StockRepository._fetch_raw_stock_history_df(ticker=ticker, period=period)
+            df = await StockRepository._fetch_raw_asset_history(ticker=ticker, period=period)
 
             if df is None or len(df) == 0:
                 logger.warning(f"No price data found for {ticker}")
                 return {}
-
 
             tasks = {}
             if "rsi" in missing_indicators:
@@ -593,18 +814,17 @@ class StockRepository():
             if "ma" in missing_indicators:
                 tasks["ma"] = IndicatorService.compute_ma_logic(
                     df, short_window=s["ma_short"], long_window=s["ma_long"]
-                    )
+                )
             if "bb" in missing_indicators:
                 tasks["bb"] = IndicatorService.compute_bollinger_logic(
                     df, period=s["bb_period"], std_dev=s["bb_std_dev"]
-                    )
+                )
             if "macd" in missing_indicators:
                 tasks["macd"] = IndicatorService.compute_macd_logic(
                     df, fast=s["macd_fast"], slow=s["macd_slow"], signal=s["macd_signal"]
-                    )
+                )
             if "rvol" in missing_indicators:
                 tasks["rvol"] = IndicatorService.compute_rvol_logic(df)
-
 
             calculated_results = {}
             if tasks:
@@ -612,12 +832,10 @@ class StockRepository():
                 executed_tasks = await asyncio.gather(*tasks.values())
                 calculated_results = dict(zip(task_names, executed_tasks))
 
-
             for name, result in calculated_results.items():
                 if result:
                     await redis_manager.setRedis(name=keys[name], value=result, exp=600)
                     cached_data[name] = result
-
 
             return {
                 "rsi": cached_data["rsi"],
@@ -675,11 +893,13 @@ class StockRepository():
     async def load_initial_stocks(file_path: str) -> dict:
         """
         Fetch initial symbol and name from given json path
+        parent directory of all json seed files is "data" directory
 
         :param file_path: path of relevant json file
         :return: dictionary converted from json
         """
-        with open(file_path, "r", encoding="utf-8") as f:
+        full_path = os.path.join("data", file_path)
+        with open(full_path, "r", encoding="utf-8") as f:
             return json.load(f)
 
     @staticmethod

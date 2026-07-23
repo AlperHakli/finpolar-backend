@@ -41,6 +41,13 @@ class RedisClient():
 
         await self.redis_client.set(name= name , value=value , ex = exp)
 
+    async def setRedisNoDictNoExp(self, name:str, value: Any):
+        """
+        Writes data to redis
+        """
+
+        await self.redis_client.set(name= name , value=value)
+
     async def setRedisNoExp(self, name:str, value: dict):
         """
         Writes data to redis without an expiration date
