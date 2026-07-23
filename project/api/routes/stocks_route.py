@@ -5,7 +5,7 @@ from project.api.base_models import GetSingleStockIndicatorModel , StockStats , 
 from project.api.dependencies import PostreSqlDbDep , RedisDbDep
 from settings import settings
 from project.api.base_models import AssetRouteBaseModels
-
+from datetime import datetime
 
 router = APIRouter(prefix="/assets", tags=["Asset Operations"])
 
@@ -27,6 +27,11 @@ async def multiple_stocks_by_sector(database_session : PostreSqlDbDep):
         database_model=StockStats,
         limit_per_sector=settings.LIMIT_STOCK_PER_SECTOR
     )
+
+@router.get("/wake-up-server")
+async def wake_up_server():
+    """only exists to wake up the server"""
+    return {"message" : f"Server is awake, time: {datetime.now()}"}
 @router.get("/search-asset")
 async def search_asset(search_key:str,database_session: PostreSqlDbDep):
     """Fetch search results from service"""
