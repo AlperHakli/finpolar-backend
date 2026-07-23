@@ -1,5 +1,6 @@
 import asyncio
 import json
+import requests
 import os.path
 from collections import defaultdict
 import yfinance
@@ -16,6 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
+# with this code yfinance thinks the program is real user
+session = requests.Session()
+session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+})
 
 class StockRepository():
     from collections import defaultdict
@@ -244,7 +250,7 @@ class StockRepository():
         if missing_stats:
             def get_info(missing_stats_inner: list[str], symbol: str):
                 fresh_data = {}
-                info = yfinance.Ticker(ticker=symbol).fast_info
+                info = yfinance.Ticker(ticker=symbol , session=session).fast_info
                 for stat in missing_stats_inner:
                     try:
                         val = info.__getattribute__(stat)
@@ -567,7 +573,7 @@ class StockRepository():
         for symbol in stock_indexes:
             try:
 
-                ticker = yfinance.Ticker(symbol)
+                ticker = yfinance.Ticker(symbol , session=session)
                 info = ticker.info
 
                 lastPrice = info.get("regularMarketPrice")
@@ -677,7 +683,7 @@ class StockRepository():
 
                 for symbol in chunk:
                     try:
-                        ticker = yfinance.Ticker(ticker=symbol)
+                        ticker = yfinance.Ticker(ticker=symbol , session=session)
 
                         value = await asyncio.to_thread(fetch_info, ticker, use_fast_info, stats)
 
