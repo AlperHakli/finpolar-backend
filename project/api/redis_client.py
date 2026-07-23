@@ -65,5 +65,5 @@ class RedisClient():
             except json.JSONDecodeError:
                 return value
 
-redis_manager = RedisClient(redis_host= settings.REDIS_HOST , redis_port= settings.REDIS_PORT)
+redis_manager = RedisClient(redis_url=settings.REDIS_URL)
 
